@@ -2,10 +2,30 @@ import { Timetable, Override } from '../models/index.js';
 
 export const getCurrentTimetableInfo = async () => {
   const now = new Date();
-  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const todayName = dayNames[now.getDay()];
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: 'numeric',
+    weekday: 'long',
+    hour12: false
+  });
   
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const parts = formatter.formatToParts(now);
+  const p = {};
+  parts.forEach(({ type, value }) => { p[type] = value; });
+  
+  let hour = parseInt(p.hour, 10);
+  if (hour === 24) hour = 0;
+
+  const todayName = p.weekday;
+  const currentMinutes = hour * 60 + parseInt(p.minute, 10);
+
+  const y = p.year;
+  const m = p.month.padStart(2, '0');
+  const d = p.day.padStart(2, '0');
+  
+  const startOfDay = new Date(`${y}-${m}-${d}T00:00:00+05:30`);
+  const endOfDay = new Date(`${y}-${m}-${d}T23:59:59+05:30`);
 
   const { Settings } = await import('../models/index.js');
   const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
@@ -21,8 +41,7 @@ export const getCurrentTimetableInfo = async () => {
     const endMins = endH * 60 + endM;
 
     if (currentMinutes >= startMins && currentMinutes <= endMins) {
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
 
       const override = await Override.findOne({
         date: { $gte: startOfDay, $lte: endOfDay },
@@ -68,8 +87,7 @@ export const getCurrentTimetableInfo = async () => {
     const [startH, startM] = period.startTime.split(':').map(Number);
     const startMins = startH * 60 + startM;
     if (startMins > currentMinutes) {
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
       const nextOverride = await Override.findOne({
         date: { $gte: startOfDay, $lte: endOfDay },
         periodIndex: period.periodIndex
