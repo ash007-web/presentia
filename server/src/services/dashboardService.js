@@ -8,12 +8,12 @@ export const getDashboardData = async () => {
   let topFive = [];
   let averageDuration = 0;
 
-  if (workflow.currentCycle && workflow.currentSubject) {
+  if (workflow.currentCycle) {
     const aggResult = await Presentation.aggregate([
       { 
         $match: { 
           cycle: workflow.currentCycle._id, 
-          subject: workflow.currentSubject,
+
           status: 'Completed'
         } 
       },

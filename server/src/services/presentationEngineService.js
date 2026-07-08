@@ -59,7 +59,7 @@ export const getQueueState = async () => {
   
   const totalStudents = await Student.countDocuments();
   
-  if (activePeriod && settings.currentCycle) {
+  if (settings.currentCycle) {
     const presentations = await Presentation.find({ cycle: settings.currentCycle._id }).populate('student');
     currentPresentationOrder = presentations.length;
     
@@ -101,8 +101,8 @@ export const getWorkflowState = async () => {
 
   const totalStudents = await Student.countDocuments();
 
-  if (activePeriod) {
-    const presented = await Presentation.find({ cycle: settings.currentCycle._id, subject: activePeriod.subject });
+  if (settings.currentCycle) {
+    const presented = await Presentation.find({ cycle: settings.currentCycle._id });
     const presentedIds = presented.map(p => p.student.toString());
     
     completedCount = presented.filter(p => p.status === 'Completed').length;
