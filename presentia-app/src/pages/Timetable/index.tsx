@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Reveal from '../../components/common/Reveal';
-import { getTimetable, saveTimetableDay, getSubjectFaculty, getTodayOverrides, createOverride, deleteOverride, getCurrentTimetableInfo } from '../../services/timetableService';
+import { getTimetable, saveTimetableDay, getSubjectFaculty, getTodayOverrides, createOverride, deleteOverride } from '../../services/timetableService';
 import { getSettings } from '../../services/settingsService';
 import { notify } from '../../utils/notify';
 
@@ -22,7 +22,6 @@ const Timetable: React.FC = () => {
   const [subjectFaculty, setSubjectFaculty] = useState<Record<string,string>>({});
   const [subjectList, setSubjectList] = useState<string[]>([]);
   
-  const [currentInfo, setCurrentInfo] = useState<any>(null);
   const [activeCycleLabel, setActiveCycleLabel] = useState('');
   
   const [editing, setEditing] = useState<{day:string;i:number}|null>(null);
@@ -36,10 +35,9 @@ const Timetable: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [ttData, sfData, infoData, ovData] = await Promise.all([
+      const [ttData, sfData, ovData] = await Promise.all([
         getTimetable(),
         getSubjectFaculty(),
-        getCurrentTimetableInfo(),
         getTodayOverrides()
       ]);
       setTt(ttData);
@@ -47,7 +45,6 @@ const Timetable: React.FC = () => {
       const keys = Object.keys(sfData);
       setSubjectList(keys);
       if (keys.length > 0) setFormData({ subject: keys[0], faculty: sfData[keys[0]] });
-      setCurrentInfo(infoData);
       setOverrides(ovData);
     } catch (err) {
       console.error('Failed to load timetable', err);
@@ -127,14 +124,68 @@ const Timetable: React.FC = () => {
     }
   };
 
-  const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-  const activePeriodIndex = currentInfo?.activePeriod?.periodIndex !== undefined ? currentInfo.activePeriod.periodIndex : -1;
-  const activePeriod = currentInfo?.activePeriod;
-  const nextPeriod = currentInfo?.nextPeriod;
-
   // Map overrides by period index for easy lookup
   const overrideMap: Record<number, any> = {};
   overrides.forEach(ov => { overrideMap[ov.periodIndex] = ov; });
+
+  // Fix Timezone Logic: Use IST for current day and time
+  const getISTData = () => {
+    const istString = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const istDate = new Date(istString);
+    const todayStr = istDate.toLocaleDateString('en-US', { weekday: 'long' });
+    const currentMinutes = istDate.getHours() * 60 + istDate.getMinutes();
+    return { todayStr, currentMinutes };
+  };
+
+  const { todayStr, currentMinutes } = getISTData();
+
+  // Compute Active and Next Periods in Frontend
+  let activePeriodIndex = -1;
+  let activePeriod: any = null;
+  let nextPeriod: any = null;
+
+  const todayPeriods = tt[todayStr] || [];
+
+  for (let i = 0; i < PERIODS.length; i++) {
+    const [startStr, endStr] = PERIODS[i].split(' – ');
+    const [sh, sm] = startStr.split(':').map(Number);
+    const [eh, em] = endStr.split(':').map(Number);
+    const startMins = sh * 60 + sm;
+    const endMins = eh * 60 + em;
+    if (currentMinutes >= startMins && currentMinutes < endMins) {
+      activePeriodIndex = i;
+      break;
+    }
+  }
+
+  const resolvePeriodData = (index: number) => {
+    if (index < 0 || index >= PERIODS.length) return null;
+    const [startStr, endStr] = PERIODS[index].split(' – ');
+    const origP = todayPeriods[index] || {};
+    const ov = overrideMap[index];
+    const subject = ov ? ov.subject : (origP.subject || '');
+    const faculty = ov ? ov.faculty : (origP.faculty || '');
+    if (!subject) return null;
+    return { periodIndex: index, subject, faculty, startTime: startStr, endTime: endStr };
+  };
+
+  activePeriod = resolvePeriodData(activePeriodIndex);
+
+  if (activePeriodIndex !== -1) {
+    for (let i = activePeriodIndex + 1; i < PERIODS.length; i++) {
+      const p = resolvePeriodData(i);
+      if (p) { nextPeriod = p; break; }
+    }
+  } else {
+    for (let i = 0; i < PERIODS.length; i++) {
+      const [startStr] = PERIODS[i].split(' – ');
+      const [sh, sm] = startStr.split(':').map(Number);
+      if (currentMinutes < sh * 60 + sm) {
+        const p = resolvePeriodData(i);
+        if (p) { nextPeriod = p; break; }
+      }
+    }
+  }
 
   return (
     <main style={{ maxWidth:1400, margin:'0 auto', padding:'36px 40px 80px' }}>
