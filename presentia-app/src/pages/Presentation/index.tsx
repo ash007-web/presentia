@@ -7,7 +7,7 @@ import { useTimetableIST } from '../../hooks/useTimetableIST';
 
 const CIRCUMFERENCE = 1068.14;
 
-const AnimatedLoadingModal = ({ type }: { type: 'page' | 'start' }) => {
+const AnimatedLoadingModal = ({ type }: { type: 'page' | 'start' | 'finish' }) => {
   const [msgIndex, setMsgIndex] = useState(0);
   const pageMessages = [
     "Loading timetable...",
@@ -22,7 +22,15 @@ const AnimatedLoadingModal = ({ type }: { type: 'page' | 'start' }) => {
     "Syncing presentation session...",
     "Finalizing workspace..."
   ];
-  const messages = type === 'page' ? pageMessages : startMessages;
+  const finishMessages = [
+    "Saving presentation...",
+    "Recording presentation time...",
+    "Updating student progress...",
+    "Preparing evaluation form...",
+    "Loading feedback workspace...",
+    "Almost ready..."
+  ];
+  const messages = type === 'page' ? pageMessages : type === 'start' ? startMessages : finishMessages;
 
   useEffect(() => {
     const int = setInterval(() => {
@@ -34,12 +42,12 @@ const AnimatedLoadingModal = ({ type }: { type: 'page' | 'start' }) => {
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'rgba(21,36,48,0.1)', backdropFilter: 'blur(4px)', zIndex: 9999, animation: 'fadeIn 0.3s ease-out' }}>
       <div style={{ background: 'rgba(255, 255, 255, 0.7)', backdropFilter: 'blur(24px) saturate(150%)', border: '1px solid rgba(255,255,255,0.7)', borderRadius: 24, padding: '40px 48px', width: '90%', maxWidth: 420, boxShadow: 'var(--shadow-xl)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', animation: 'scaleUp 0.3s ease-out' }}>
-        <div style={{ fontSize: 36, marginBottom: 16, animation: type === 'start' ? 'pulseScale 1.5s ease-in-out infinite' : 'none' }}>🎤</div>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>{type === 'page' ? 'Preparing Presentation' : 'Starting Presentation'}</h2>
+        <div style={{ fontSize: 36, marginBottom: 16, animation: type === 'start' || type === 'finish' ? 'pulseScale 1.5s ease-in-out infinite' : 'none' }}>{type === 'finish' ? '✅' : '🎤'}</div>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>{type === 'page' ? 'Preparing Presentation' : type === 'start' ? 'Starting Presentation' : 'Finishing Presentation'}</h2>
         
-        {type === 'page' && (
+        {(type === 'page' || type === 'finish') && (
           <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 24, lineHeight: 1.5 }}>
-            Loading today's session...<br/>Please wait a moment.
+            {type === 'page' ? "Loading today's session..." : "Preparing evaluation..."}<br/>Please wait a moment.
           </p>
         )}
 
@@ -70,6 +78,7 @@ const Presentation: React.FC = () => {
   const [totalSeconds, setTotalSeconds] = useState(120);
   const [workflow, setWorkflow] = useState<any>(null);
   const [starting, setStarting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [timeLeft, setTimeLeft] = useState(totalSeconds);
@@ -325,14 +334,28 @@ const Presentation: React.FC = () => {
   };
 
   const finish = async () => {
+    if (finishing || evalOpen) return;
+    setFinishing(true);
+    const startMs = Date.now();
     try {
       await finishPresentation();
+      
+      const elapsed = Date.now() - startMs;
+      if (elapsed < 400) {
+        await new Promise(r => setTimeout(r, 400 - elapsed));
+      }
+      
       if (intervalRef.current) clearInterval(intervalRef.current);
       setRunning(false); setTimerState('Finished'); setStageStatus('Finished');
       backendStateRef.current = 'Evaluating';
       notify('Evaluation Pending', 'Student evaluation is awaiting submission.', 'high');
+      
+      setFinishing(false);
       openEval();
-    } catch(e) { console.error(e); }
+    } catch(e) { 
+      console.error(e); 
+      setFinishing(false);
+    }
   };
 
   const openEval = () => { setEvalOpen(true); setEvalSuccess(false); };
@@ -396,6 +419,7 @@ const Presentation: React.FC = () => {
   return (
     <>
       {starting && <AnimatedLoadingModal type="start" />}
+      {finishing && <AnimatedLoadingModal type="finish" />}
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(21,36,48,0.28)', backdropFilter: 'blur(2px)', zIndex: 50, opacity: (evalOpen || selectModalOpen) ? 1 : 0, pointerEvents: (evalOpen || selectModalOpen) ? 'auto' : 'none', transition: 'opacity .5s' }} />
 
       {/* Select Student Modal */}
