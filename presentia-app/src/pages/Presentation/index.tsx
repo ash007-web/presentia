@@ -3,10 +3,12 @@ import { startPresentation, pausePresentation, resumePresentation, finishPresent
 import { CRITERIA_NAMES } from '../../utils/constants';
 import { pad } from '../../utils/helpers';
 import { notify } from '../../utils/notify';
+import { useTimetableIST } from '../../hooks/useTimetableIST';
 
 const CIRCUMFERENCE = 1068.14;
 
 const Presentation: React.FC = () => {
+  const { activePeriodIndex, nextPeriod, currentFaculty, currentSubject } = useTimetableIST();
   const [totalSeconds, setTotalSeconds] = useState(120);
   const [workflow, setWorkflow] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -488,7 +490,13 @@ const Presentation: React.FC = () => {
       {/* Stage */}
       <main style={{ maxWidth: 920, margin: '0 auto', padding: '12px 32px 60px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginTop: 6, marginBottom: 22 }}>
-          {[student?.rollNo || 'Pending', `Subject · ${workflow?.session?.subject || 'N/A'}`, `Faculty · ${workflow?.session?.faculty || 'N/A'}`].map((chip, i) => (
+          {[
+            student?.rollNo || 'Pending', 
+            `Subject · ${currentSubject || 'N/A'}`, 
+            `Faculty · ${currentFaculty}`,
+            activePeriodIndex !== -1 ? `Period ${activePeriodIndex + 1}` : 'Free Period',
+            nextPeriod ? `Next · ${nextPeriod.subject}` : null
+          ].filter(Boolean).map((chip, i) => (
             <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 15px', borderRadius: 100, background: 'rgba(255,255,255,0.55)', border: '1px solid var(--line)', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-soft)' }}>{chip}</span>
           ))}
         </div>
