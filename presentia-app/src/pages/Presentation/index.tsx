@@ -7,10 +7,69 @@ import { useTimetableIST } from '../../hooks/useTimetableIST';
 
 const CIRCUMFERENCE = 1068.14;
 
+const AnimatedLoadingModal = ({ type }: { type: 'page' | 'start' }) => {
+  const [msgIndex, setMsgIndex] = useState(0);
+  const pageMessages = [
+    "Loading timetable...",
+    "Detecting current class...",
+    "Syncing presentation queue...",
+    "Preparing evaluation workspace...",
+    "Almost ready..."
+  ];
+  const startMessages = [
+    "Preparing timer...",
+    "Loading student...",
+    "Syncing presentation session...",
+    "Finalizing workspace..."
+  ];
+  const messages = type === 'page' ? pageMessages : startMessages;
+
+  useEffect(() => {
+    const int = setInterval(() => {
+      setMsgIndex(i => (i + 1) % messages.length);
+    }, 600);
+    return () => clearInterval(int);
+  }, [messages.length]);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'rgba(21,36,48,0.1)', backdropFilter: 'blur(4px)', zIndex: 9999, animation: 'fadeIn 0.3s ease-out' }}>
+      <div style={{ background: 'rgba(255, 255, 255, 0.7)', backdropFilter: 'blur(24px) saturate(150%)', border: '1px solid rgba(255,255,255,0.7)', borderRadius: 24, padding: '40px 48px', width: '90%', maxWidth: 420, boxShadow: 'var(--shadow-xl)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', animation: 'scaleUp 0.3s ease-out' }}>
+        <div style={{ fontSize: 36, marginBottom: 16, animation: type === 'start' ? 'pulseScale 1.5s ease-in-out infinite' : 'none' }}>🎤</div>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>{type === 'page' ? 'Preparing Presentation' : 'Starting Presentation'}</h2>
+        
+        {type === 'page' && (
+          <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 24, lineHeight: 1.5 }}>
+            Loading today's session...<br/>Please wait a moment.
+          </p>
+        )}
+
+        <div style={{ width: '100%', height: 4, background: 'rgba(79,162,207,0.15)', borderRadius: 4, overflow: 'hidden', position: 'relative', marginBottom: 16, marginTop: type === 'start' ? 24 : 0 }}>
+          <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', width: '40%', background: 'var(--primary-blue)', borderRadius: 4, animation: 'progressIndeterminate 1.2s ease-in-out infinite' }} />
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary-blue)', height: 20, overflow: 'hidden', position: 'relative', width: '100%' }}>
+          {messages.map((msg, i) => (
+            <div key={i} style={{ position: 'absolute', width: '100%', left: 0, transition: 'all 0.3s ease', opacity: i === msgIndex ? 1 : 0, transform: `translateY(${(i - msgIndex) * 20}px)` }}>
+              {msg}
+            </div>
+          ))}
+        </div>
+      </div>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes scaleUp { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        @keyframes pulseScale { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+        @keyframes progressIndeterminate { 0% { left: -40%; } 100% { left: 100%; } }
+      `}</style>
+    </div>
+  );
+};
+
 const Presentation: React.FC = () => {
   const { activePeriodIndex, nextPeriod, currentFaculty, currentSubject } = useTimetableIST();
   const [totalSeconds, setTotalSeconds] = useState(120);
   const [workflow, setWorkflow] = useState<any>(null);
+  const [starting, setStarting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [timeLeft, setTimeLeft] = useState(totalSeconds);
@@ -166,7 +225,8 @@ const Presentation: React.FC = () => {
   }, [updateStage, updateRing]);
 
   const start = async () => {
-    if (running || evalOpen) return;
+    if (running || evalOpen || starting) return;
+    setStarting(true);
     try {
       if (backendStateRef.current === 'Paused') {
         await resumePresentation();
@@ -180,11 +240,16 @@ const Presentation: React.FC = () => {
       intervalRef.current = setInterval(tick, 1000);
       notify('Session is Live', `Presentation started.`, 'high');
       loadState();
-    } catch(e) { console.error(e); }
+      setStarting(false);
+    } catch(e) { 
+      console.error(e); 
+      setStarting(false); 
+    }
   };
 
   const handleSelectStudent = async (studentId: string) => {
-    if (running || evalOpen) return;
+    if (running || evalOpen || starting) return;
+    setStarting(true);
     try {
       await overrideActiveStudent(studentId);
       setSelectModalOpen(false);
@@ -196,9 +261,11 @@ const Presentation: React.FC = () => {
       intervalRef.current = setInterval(tick, 1000);
       notify('Session is Live', `Presentation resumed for selected student.`, 'high');
       loadState();
+      setStarting(false);
     } catch (e) {
       console.error(e);
       notify('Error', 'Failed to select student.', 'high');
+      setStarting(false);
     }
   };
 
@@ -323,11 +390,12 @@ const Presentation: React.FC = () => {
   const timerColor = stage === 'danger' ? 'var(--primary-red)' : stage === 'warning' ? '#E8963C' : 'var(--ink)';
   const canFinish = (everStarted || overtime > 0) && !evalOpen;
 
-  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><div style={{ width: 40, height: 40, border: '3px solid var(--line)', borderTopColor: 'var(--primary-blue)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /></div>;
+  if (loading) return <AnimatedLoadingModal type="page" />;
   if (error) return <div style={{ textAlign: 'center', marginTop: 100 }}><h3 style={{color:'var(--primary-red)'}}>Failed to load</h3><p>{error}</p><button className="btn-primary" onClick={loadState}>Retry</button></div>;
 
   return (
     <>
+      {starting && <AnimatedLoadingModal type="start" />}
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(21,36,48,0.28)', backdropFilter: 'blur(2px)', zIndex: 50, opacity: (evalOpen || selectModalOpen) ? 1 : 0, pointerEvents: (evalOpen || selectModalOpen) ? 'auto' : 'none', transition: 'opacity .5s' }} />
 
       {/* Select Student Modal */}
