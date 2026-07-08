@@ -6,7 +6,7 @@ import AnimatedNumber from '../../components/common/AnimatedNumber';
 import TrendChart from '../../components/charts/TrendChart';
 import { getDashboardStats, getWeeklyTrend } from '../../services/dashboardService';
 import { getRecentPresentations } from '../../services/presentationService';
-import { getCurrentTimetableInfo } from '../../services/timetableService';
+import { useTimetableIST } from '../../hooks/useTimetableIST';
 import { addRipple, fmtDuration } from '../../utils/helpers';
 
 const StarIcon = () => (
@@ -32,18 +32,17 @@ const Dashboard: React.FC = () => {
   const [weeklyTrend, setWeeklyTrend] = useState<{ counts: number[]; labels: string[]; todayIndex: number; total: number }>({ counts: [0,0,0,0,0,0], labels: ['Mon','Tue','Wed','Thu','Fri','Sat'], todayIndex: 5, total: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [greetingFaculty, setGreetingFaculty] = useState('');
+  const { currentFaculty, currentSubject } = useTimetableIST();
 
   const loadData = () => {
     setLoading(true);
     setError('');
-    Promise.all([getDashboardStats(), getRecentPresentations(), getWeeklyTrend(), getCurrentTimetableInfo()])
-      .then(([dash, recent, trend, ttInfo]) => {
+    Promise.all([getDashboardStats(), getRecentPresentations(), getWeeklyTrend()])
+      .then(([dash, recent, trend]) => {
         setDashData(dash.data);
         setSchedule(dash.data?.todaysSchedule || []);
         setRecentPresentations(recent?.data?.presentations || []);
         setWeeklyTrend(trend);
-        setGreetingFaculty(ttInfo.activePeriod ? ttInfo.activePeriod.faculty : (ttInfo.defaultFaculty || 'Navyamol K T'));
         setLoading(false);
       })
       .catch((err) => {
@@ -55,20 +54,18 @@ const Dashboard: React.FC = () => {
   useEffect(() => { 
     loadData();
     const interval = setInterval(() => {
-      Promise.all([getDashboardStats(), getCurrentTimetableInfo()]).then(([dash, ttInfo]) => {
+      Promise.all([getDashboardStats()]).then(([dash]) => {
         setDashData(dash.data);
         setSchedule(dash.data?.todaysSchedule || []);
-        setGreetingFaculty(ttInfo.activePeriod ? ttInfo.activePeriod.faculty : (ttInfo.defaultFaculty || 'Navyamol K T'));
       }).catch(console.error);
     }, 30000); // poll every 30s
     
     // Reload when user comes back to this tab
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        Promise.all([getDashboardStats(), getCurrentTimetableInfo()]).then(([dash, ttInfo]) => {
+        Promise.all([getDashboardStats()]).then(([dash]) => {
           setDashData(dash.data);
           setSchedule(dash.data?.todaysSchedule || []);
-          setGreetingFaculty(ttInfo.activePeriod ? ttInfo.activePeriod.faculty : (ttInfo.defaultFaculty || 'Navyamol K T'));
         }).catch(console.error);
       }
     };
@@ -104,7 +101,7 @@ const Dashboard: React.FC = () => {
       <Reveal style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, marginBottom: 32, flexWrap: 'wrap' }}>
         <div>
           <p className="eyebrow"><span className="dot" />{today}</p>
-          <h1 style={{ fontSize: 32, fontWeight: 600, marginBottom: 8 }}>Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'}{greetingFaculty ? `, ${greetingFaculty}` : ''} 👋</h1>
+          <h1 style={{ fontSize: 32, fontWeight: 600, marginBottom: 8 }}>Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'}{currentFaculty ? `, ${currentFaculty}` : ''} 👋</h1>
           <p style={{ color: 'var(--ink-soft)', fontSize: 15, maxWidth: 480 }}>Here's what's happening in today's presentation session — live and up to date.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -130,13 +127,13 @@ const Dashboard: React.FC = () => {
             </div>
             <div style={{ marginBottom: 22 }}>
               <div style={{ fontSize: 12, color: 'var(--ink-faint)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>Current Subject · Auto-detected</div>
-              <div style={{ fontSize: 27, fontWeight: 600 }}>{dashData?.currentSubject || 'No Subject Active'}</div>
+              <div style={{ fontSize: 27, fontWeight: 600 }}>{currentSubject || 'No Subject Active'}</div>
             </div>
             <div style={{ height: 1, background: 'var(--line)', margin: '4px 0 20px' }}/>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
-              <div className="avatar-md">{dashData?.faculty ? dashData.faculty.substring(0,2).toUpperCase() : 'NA'}</div>
+              <div className="avatar-md">{currentFaculty ? currentFaculty.substring(0,2).toUpperCase() : 'NK'}</div>
               <div>
-                <div style={{ fontSize: '14.5px', fontWeight: 600 }}>{dashData?.faculty || 'No Faculty'}</div>
+                <div style={{ fontSize: '14.5px', fontWeight: 600 }}>{currentFaculty}</div>
                 <div style={{ fontSize: '12.5px', color: 'var(--ink-soft)' }}>Current Faculty</div>
               </div>
             </div>
@@ -180,7 +177,7 @@ const Dashboard: React.FC = () => {
             <span className="badge badge-live" style={{ width: 'fit-content' }}><span className="dot" />Up Next</span>
             <div style={{ fontSize: 24, fontWeight: 600, margin: '16px 0 8px' }}>{dashData?.nextStudent?.name || 'No Pending Students'}</div>
             <span style={{ display: 'inline-flex', fontSize: '11.5px', fontWeight: 600, color: 'var(--ink-soft)', background: 'rgba(255,255,255,0.7)', padding: '5px 11px', borderRadius: 100, border: '1px solid var(--line)', width: 'fit-content' }}>Roll No. {dashData?.nextStudent?.rollNo || 'N/A'}</span>
-            <p style={{ fontSize: '13.5px', color: 'var(--ink-soft)', marginTop: 12, lineHeight: 1.5 }}>Next in line for {dashData?.currentSubject || 'presentation'}.</p>
+            <p style={{ fontSize: '13.5px', color: 'var(--ink-soft)', marginTop: 12, lineHeight: 1.5 }}>Next in line for {currentSubject || 'presentation'}.</p>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto', paddingTop: 20 }}>
               <button onClick={() => navigate('/presentation')} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: 'var(--primary-blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
                 <svg viewBox="0 0 24 24" fill="none" style={{ width: 14, height: 14 }}><path d="M6 4l14 8-14 8V4z" fill="currentColor"/></svg>

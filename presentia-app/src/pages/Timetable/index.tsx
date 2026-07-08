@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import Reveal from '../../components/common/Reveal';
-import { getTimetable, saveTimetableDay, getSubjectFaculty, getTodayOverrides, createOverride, deleteOverride } from '../../services/timetableService';
+import { saveTimetableDay, getSubjectFaculty, createOverride, deleteOverride } from '../../services/timetableService';
 import { getSettings } from '../../services/settingsService';
+import { useTimetableIST } from '../../hooks/useTimetableIST';
 import { notify } from '../../utils/notify';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -16,9 +17,7 @@ const PERIODS = [
 ];
 
 const Timetable: React.FC = () => {
-  const [tt, setTt] = useState<Record<string, any[]>>({
-    Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [], Saturday: []
-  });
+  const { tt, setTt, overrides, activePeriodIndex, activePeriod, nextPeriod, todayStr, reloadTimetable } = useTimetableIST();
   const [subjectFaculty, setSubjectFaculty] = useState<Record<string,string>>({});
   const [subjectList, setSubjectList] = useState<string[]>([]);
   
@@ -27,27 +26,20 @@ const Timetable: React.FC = () => {
   const [editing, setEditing] = useState<{day:string;i:number}|null>(null);
   const [savedCells, setSavedCells] = useState<Set<string>>(new Set());
   
-  // Overrides list from backend
-  const [overrides, setOverrides] = useState<any[]>([]);
-  
   const [openForm, setOpenForm] = useState<number|null>(null);
   const [formData, setFormData] = useState<{subject:string;faculty:string}>({ subject:'', faculty:'' });
 
   const loadData = async () => {
     try {
-      const [ttData, sfData, ovData] = await Promise.all([
-        getTimetable(),
-        getSubjectFaculty(),
-        getTodayOverrides()
+      const [sfData] = await Promise.all([
+        getSubjectFaculty()
       ]);
-      setTt(ttData);
-      setSubjectFaculty(sfData);
       const keys = Object.keys(sfData);
+      setSubjectFaculty(sfData);
       setSubjectList(keys);
       if (keys.length > 0) setFormData({ subject: keys[0], faculty: sfData[keys[0]] });
-      setOverrides(ovData);
     } catch (err) {
-      console.error('Failed to load timetable', err);
+      console.error('Failed to load timetable sfData', err);
     }
   };
 
@@ -95,11 +87,11 @@ const Timetable: React.FC = () => {
     // Save to DB
     try {
       await saveTimetableDay(day, dayPeriods);
-      loadData();
+      reloadTimetable();
       notify('Timetable Updated', `${day} schedule updated.`);
     } catch (err) {
       alert('Failed to save timetable change');
-      loadData();
+      reloadTimetable();
     }
   };
 
@@ -107,7 +99,7 @@ const Timetable: React.FC = () => {
     try {
       await createOverride(i, formData.subject, formData.faculty);
       setOpenForm(null);
-      loadData();
+      reloadTimetable();
       notify('Override Applied', `Period ${i+1} overridden with ${formData.subject}.`, 'high');
     } catch (err: any) {
       alert(err.message || 'Failed to create override');
@@ -117,7 +109,7 @@ const Timetable: React.FC = () => {
   const handleDeleteOverride = async (id: string) => {
     try {
       await deleteOverride(id);
-      loadData();
+      reloadTimetable();
       notify('Override Removed', 'Timetable override was cleared.', 'low');
     } catch (err: any) {
       alert(err.message || 'Failed to delete override');
@@ -127,65 +119,6 @@ const Timetable: React.FC = () => {
   // Map overrides by period index for easy lookup
   const overrideMap: Record<number, any> = {};
   overrides.forEach(ov => { overrideMap[ov.periodIndex] = ov; });
-
-  // Fix Timezone Logic: Use IST for current day and time
-  const getISTData = () => {
-    const istString = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
-    const istDate = new Date(istString);
-    const todayStr = istDate.toLocaleDateString('en-US', { weekday: 'long' });
-    const currentMinutes = istDate.getHours() * 60 + istDate.getMinutes();
-    return { todayStr, currentMinutes };
-  };
-
-  const { todayStr, currentMinutes } = getISTData();
-
-  // Compute Active and Next Periods in Frontend
-  let activePeriodIndex = -1;
-  let activePeriod: any = null;
-  let nextPeriod: any = null;
-
-  const todayPeriods = tt[todayStr] || [];
-
-  for (let i = 0; i < PERIODS.length; i++) {
-    const [startStr, endStr] = PERIODS[i].split(' – ');
-    const [sh, sm] = startStr.split(':').map(Number);
-    const [eh, em] = endStr.split(':').map(Number);
-    const startMins = sh * 60 + sm;
-    const endMins = eh * 60 + em;
-    if (currentMinutes >= startMins && currentMinutes < endMins) {
-      activePeriodIndex = i;
-      break;
-    }
-  }
-
-  const resolvePeriodData = (index: number) => {
-    if (index < 0 || index >= PERIODS.length) return null;
-    const [startStr, endStr] = PERIODS[index].split(' – ');
-    const origP = todayPeriods[index] || {};
-    const ov = overrideMap[index];
-    const subject = ov ? ov.subject : (origP.subject || '');
-    const faculty = ov ? ov.faculty : (origP.faculty || '');
-    if (!subject) return null;
-    return { periodIndex: index, subject, faculty, startTime: startStr, endTime: endStr };
-  };
-
-  activePeriod = resolvePeriodData(activePeriodIndex);
-
-  if (activePeriodIndex !== -1) {
-    for (let i = activePeriodIndex + 1; i < PERIODS.length; i++) {
-      const p = resolvePeriodData(i);
-      if (p) { nextPeriod = p; break; }
-    }
-  } else {
-    for (let i = 0; i < PERIODS.length; i++) {
-      const [startStr] = PERIODS[i].split(' – ');
-      const [sh, sm] = startStr.split(':').map(Number);
-      if (currentMinutes < sh * 60 + sm) {
-        const p = resolvePeriodData(i);
-        if (p) { nextPeriod = p; break; }
-      }
-    }
-  }
 
   return (
     <main style={{ maxWidth:1400, margin:'0 auto', padding:'36px 40px 80px' }}>

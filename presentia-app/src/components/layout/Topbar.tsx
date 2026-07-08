@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { pad, initialsOf } from '../../utils/helpers';
 import { useNotifications } from '../../context/NotificationContext';
-import { getCurrentTimetableInfo } from '../../services/timetableService';
+import { useTimetableIST } from '../../hooks/useTimetableIST';
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard' },
@@ -41,18 +41,12 @@ const Topbar: React.FC = () => {
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const { currentFaculty } = useTimetableIST();
   const [facultyName, setFacultyName] = useState('Navyamol K T');
 
   useEffect(() => {
-    const fetchFaculty = () => {
-      getCurrentTimetableInfo().then(ttInfo => {
-        setFacultyName(ttInfo.activePeriod ? ttInfo.activePeriod.faculty : (ttInfo.defaultFaculty || 'Navyamol K T'));
-      }).catch(console.error);
-    };
-    fetchFaculty();
-    const intervalId = setInterval(fetchFaculty, 30000);
-    return () => clearInterval(intervalId);
-  }, []);
+    setFacultyName(currentFaculty);
+  }, [currentFaculty]);
 
   useEffect(() => {
     const updateClock = () => {
