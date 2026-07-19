@@ -159,20 +159,23 @@ export const getWorkflowState = async (prefetchedSettings = null) => {
 // ─── Presentation Controls ────────────────────────────────────────────────────
 
 export const startPresentation = async (studentId) => {
-  const { settings, activePeriod } = await getSystemState();
-  if (!activePeriod) throw new AppError('No active period in timetable to start presentation', 400);
+  const { settings, activePeriod, ttInfo } = await getSystemState();
+  // Use activePeriod if a class is running right now; fall back to nextPeriod
+  // so teachers can start slightly before/after a period boundary.
+  const period = activePeriod || ttInfo?.nextPeriod || null;
+  if (!period) throw new AppError('No active period in timetable to start presentation', 400);
   if (settings.activeSession.state !== 'Idle') throw new AppError('A presentation is already active or evaluating', 400);
 
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
 
-  const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
+  const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: period.subject });
 
   const presentation = await Presentation.create({
     studentId: student.id,
     cycleId: settings.currentCycle.id,
-    subject: activePeriod.subject,
-    faculty: activePeriod.faculty,
+    subject: period.subject,
+    faculty: period.faculty,
     status: 'Pending',
     presentationOrder: orderCount + 1,
     presentationDate: new Date(),
@@ -385,8 +388,9 @@ export const resetSession = async () => {
 };
 
 export const overrideActiveStudent = async (studentId) => {
-  const { settings, activePeriod } = await getSystemState();
-  if (!activePeriod) throw new AppError('No active period in timetable to start presentation', 400);
+  const { settings, activePeriod, ttInfo } = await getSystemState();
+  const period = activePeriod || ttInfo?.nextPeriod || null;
+  if (!period) throw new AppError('No active period in timetable to start presentation', 400);
   if (settings.activeSession.state !== 'Idle') throw new AppError('A presentation is already active or evaluating', 400);
 
   const student = await Student.findById(studentId);
@@ -395,7 +399,7 @@ export const overrideActiveStudent = async (studentId) => {
   let presentation = await Presentation.findOne({
     studentId: student.id,
     cycleId: settings.currentCycle.id,
-    subject: activePeriod.subject,
+    subject: period.subject,
   });
 
   if (presentation) {
@@ -407,13 +411,13 @@ export const overrideActiveStudent = async (studentId) => {
   } else {
     const orderCount = await Presentation.countDocuments({
       cycleId: settings.currentCycle.id,
-      subject: activePeriod.subject,
+      subject: period.subject,
     });
     presentation = await Presentation.create({
       studentId: student.id,
       cycleId: settings.currentCycle.id,
-      subject: activePeriod.subject,
-      faculty: activePeriod.faculty,
+      subject: period.subject,
+      faculty: period.faculty,
       status: 'Pending',
       presentationOrder: orderCount + 1,
       presentationDate: new Date(),

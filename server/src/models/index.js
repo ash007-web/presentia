@@ -594,14 +594,8 @@ export const Override = {
   },
 
   async find(query = {}) {
-    let cacheKey = null;
-    if (query.date && query.date.$gte && query.date.$lte) {
-      const keyStr = query.date.$gte instanceof Date ? query.date.$gte.toISOString() : query.date.$gte;
-      cacheKey = `Override:date:${keyStr}`;
-      const cached = getCache(cacheKey);
-      if (cached) return cached;
-    }
-
+    // Override cache is intentionally disabled — overrides are short-lived
+    // and must reflect changes immediately. Caching caused stale reads.
     let q = overridesCol();
     for (const [key, val] of Object.entries(query)) {
       if (val && typeof val === 'object' && ('$gte' in val || '$lte' in val)) {
@@ -617,8 +611,6 @@ export const Override = {
       if (dateDiff !== 0) return dateDiff;
       return a.periodIndex - b.periodIndex;
     });
-
-    if (cacheKey) setCache(cacheKey, results, 300); // 5 minutes
     return results;
   },
 

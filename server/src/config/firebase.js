@@ -28,8 +28,19 @@ const initFirebase = () => {
     const serviceAccount = JSON.parse(readFileSync(keyPath, 'utf8'));
     initializeApp({ credential: cert(serviceAccount) });
     console.log('Firebase Admin SDK initialized with service account ✓');
+  } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+    // Priority 3: Environment variables (Vercel)
+    initializeApp({
+      credential: cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        // Convert escaped newlines back to actual newlines for Vercel
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      }),
+    });
+    console.log(`Firebase Admin SDK initialized with environment variables (project: ${process.env.FIREBASE_PROJECT_ID}) ✓`);
   } else if (process.env.FIREBASE_PROJECT_ID) {
-    // Priority 3: Application Default Credentials (gcloud auth / GCP environment)
+    // Priority 4: Application Default Credentials (gcloud auth / GCP environment)
     // Works on GCP Cloud Run, App Engine, etc.
     initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID });
     console.log(`Firebase Admin SDK initialized with ADC (project: ${process.env.FIREBASE_PROJECT_ID}) ✓`);
@@ -46,7 +57,9 @@ const initFirebase = () => {
       '',
       '   2. Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json in .env',
       '',
-      '   3. Run in a GCP environment with default credentials and set FIREBASE_PROJECT_ID',
+      '   3. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env (for Vercel)',
+      '',
+      '   4. Run in a GCP environment with default credentials and set FIREBASE_PROJECT_ID',
       '══════════════════════════════════════════════════════',
     ].join('\n');
     console.error(msg);
