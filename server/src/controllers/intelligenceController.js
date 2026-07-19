@@ -77,7 +77,8 @@ export const resetSession = asyncHandler(async (req, res) => {
 export const startNewCycle = asyncHandler(async (req, res) => {
   const { cycleNumber, semester } = req.body;
   const cycle = await cycleService.createCycle({ cycleNumber, semester, startDate: new Date() });
-  const settings = await import('../services/settingsService.js').then(m => m.updateSettings({ currentCycle: cycle._id }));
+  const { updateSettings } = await import('../services/settingsService.js');
+  const settings = await updateSettings({ currentCycle: cycle.id });
   sendSuccess(res, 200, { cycle, settings }, 'New cycle started');
 });
 
@@ -92,7 +93,7 @@ export const resetCycle = asyncHandler(async (req, res) => {
   const { cycleId } = req.body;
   if (!cycleId) throw new Error('cycleId is required');
   const { Presentation } = await import('../models/index.js');
-  await Presentation.deleteMany({ cycle: cycleId });
+  await Presentation.deleteMany({ cycleId });
   sendSuccess(res, 200, {}, 'Cycle reset — all presentations deleted');
 });
 
@@ -123,10 +124,12 @@ export const exportLeaderboard = asyncHandler(async (req, res) => {
   const { type = 'current', search = '' } = req.query;
   const { Settings } = await import('../models/index.js');
   const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
-  const currentCycle = settings?.currentCycle || 1;
-  const cycleLabel = `Cycle ${currentCycle}`;
+  const currentCycleNum = settings?.currentCycle?.cycleNumber || 1;
+  const cycleLabel = `Cycle ${currentCycleNum}`;
 
-  let data = type === 'overall' ? await leaderboardService.getOverallLeaderboard() : await leaderboardService.getCurrentLeaderboard();
+  let data = type === 'overall'
+    ? await leaderboardService.getOverallLeaderboard()
+    : await leaderboardService.getCurrentLeaderboard();
 
   if (search) {
     const s = search.toLowerCase();
@@ -147,7 +150,7 @@ export const exportLeaderboard = asyncHandler(async (req, res) => {
     { header: 'Admission No', key: 'admissionNo', width: 20 },
     { header: 'Overall Rating', key: 'rating', width: 15 },
     { header: 'Completed', key: 'count', width: 15 },
-    { header: 'Current Cycle', key: 'cycle', width: 15 }
+    { header: 'Current Cycle', key: 'cycle', width: 15 },
   ];
 
   worksheet.getRow(1).font = { bold: true };
@@ -161,12 +164,12 @@ export const exportLeaderboard = asyncHandler(async (req, res) => {
       admissionNo: row.student?.admissionNo || 'N/A',
       rating: (row.averageRating || 0).toFixed(2),
       count: row.presentationsCount || 0,
-      cycle: cycleLabel
+      cycle: cycleLabel,
     });
   });
 
   const dateStr = new Date().toISOString().split('T')[0];
-  const filename = `Leaderboard_Cycle-${currentCycle}_${dateStr}.xlsx`;
+  const filename = `Leaderboard_Cycle-${currentCycleNum}_${dateStr}.xlsx`;
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

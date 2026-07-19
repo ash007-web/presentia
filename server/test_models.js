@@ -1,21 +1,20 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import mongoose from 'mongoose';
+import './src/config/firebase.js';
 import { Student, Cycle, Presentation, Timetable, Override, Settings } from './src/models/index.js';
 
 const runTest = async () => {
-  console.log('Compiling models...');
+  console.log('Verifying Firestore models...');
   try {
-    // Model compilation happens on import
     if (Student && Cycle && Presentation && Timetable && Override && Settings) {
-      console.log('✅ All models compiled successfully.');
+      console.log('✅ All Firestore collection helpers loaded successfully.');
     } else {
-      console.log('❌ Failed to compile some models.');
+      console.log('❌ Failed to load some collection helpers.');
       process.exit(1);
     }
   } catch (err) {
-    console.error('Error during compilation:', err);
+    console.error('Error during verification:', err);
     process.exit(1);
   }
   process.exit(0);

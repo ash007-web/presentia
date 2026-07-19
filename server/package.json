@@ -8,15 +8,16 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed": "node src/scripts/seed.js",
-    "reset": "node src/scripts/reset.js"
+    "reset": "node src/scripts/reset.js",
+    "migrate": "node src/scripts/migrate.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
+    "firebase-admin": "^13.4.0",
     "joi": "^18.2.3",
-    "mongoose": "^9.7.3",
     "multer": "^2.2.0"
   },
   "devDependencies": {

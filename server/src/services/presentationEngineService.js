@@ -2,32 +2,36 @@ import { Settings, Presentation, Student } from '../models/index.js';
 import AppError from '../utils/AppError.js';
 import { getCurrentTimetableInfo } from './timetableEngineService.js';
 
-const getSystemState = async () => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' }).populate('currentCycle');
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const getSystemState = async (prefetchedSettings = null) => {
+  const settings = prefetchedSettings || await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
   if (!settings || !settings.currentCycle) {
     throw new AppError('Global settings or cycle not properly initialized', 400);
   }
-  const ttInfo = await getCurrentTimetableInfo();
-  return { settings, activePeriod: ttInfo.activePeriod };
+  const ttInfo = await getCurrentTimetableInfo(settings);
+  return { settings, activePeriod: ttInfo.activePeriod, ttInfo };
 };
+
+// ─── Session State ────────────────────────────────────────────────────────────
 
 export const getSessionState = async () => {
   const { settings, activePeriod } = await getSystemState();
   const session = settings.activeSession;
-  
-  let elapsed = session.accumulatedTime;
+
+  let elapsed = session.accumulatedTime || 0;
   if (session.state === 'Live' && session.lastUnpausedAt) {
-    elapsed += (new Date() - session.lastUnpausedAt) / 1000;
+    elapsed += (new Date() - new Date(session.lastUnpausedAt)) / 1000;
   }
-  
+
   let student = null;
-  let cycle = settings.currentCycle?.cycleNumber;
-  
-  if (session.presentation) {
-    const p = await Presentation.findById(session.presentation).populate('student');
-    if (p) student = p.student;
+  const cycle = settings.currentCycle?.cycleNumber;
+
+  if (session.presentationId) {
+    const p = await Presentation.findById(session.presentationId);
+    if (p) student = await Student.findById(p.studentId);
   }
-  
+
   return {
     presentationRunning: session.state === 'Live',
     elapsed: Math.round(elapsed),
@@ -36,13 +40,15 @@ export const getSessionState = async () => {
     subject: activePeriod?.subject,
     faculty: activePeriod?.faculty,
     status: session.state,
-    duration: settings.defaultDuration
+    duration: settings.defaultDuration,
   };
 };
 
+// ─── Queue State ──────────────────────────────────────────────────────────────
+
 export const getQueueState = async () => {
   const { settings, activePeriod } = await getSystemState();
-  
+
   let currentStudent = null;
   let nextStudent = null;
   let upcomingStudents = [];
@@ -51,35 +57,53 @@ export const getQueueState = async () => {
   let redoStudents = [];
   let estimatedRemaining = 0;
   let currentPresentationOrder = 0;
+
+  let currentPresentationPromise = Promise.resolve(null);
+  let currentStudentPromise = Promise.resolve(null);
   
-  if (settings.activeSession.presentation) {
-    const p = await Presentation.findById(settings.activeSession.presentation).populate('student');
-    if (p) currentStudent = p.student;
+  if (settings.activeSession.presentationId) {
+    currentPresentationPromise = Presentation.findById(settings.activeSession.presentationId).then(async p => {
+      if (p) currentStudent = await Student.findById(p.studentId);
+      return p;
+    });
   }
-  
-  const totalStudents = await Student.countDocuments();
-  
+
+  let presentationsPromise = Promise.resolve([]);
+  let allStudentsPromise = Promise.resolve([]);
+
   if (settings.currentCycle) {
-    const presentations = await Presentation.find({ cycle: settings.currentCycle._id }).populate('student');
+    presentationsPromise = Presentation.find({ cycleId: settings.currentCycle.id });
+    allStudentsPromise = Student.findAll();
+  }
+
+  const [presentations, allStudents] = await Promise.all([
+    presentationsPromise,
+    allStudentsPromise,
+    currentPresentationPromise
+  ]);
+
+  if (settings.currentCycle) {
     currentPresentationOrder = presentations.length;
-    
-    const presentedIds = presentations.map(p => p.student._id.toString());
-    const allStudents = await Student.find({})
-      .collation({ locale: 'en', numericOrdering: true })
-      .sort({ rollNo: 1 });
-    
-    const pendingStudents = allStudents.filter(s => !presentedIds.includes(s._id.toString()));
-    
-    skippedStudents = presentations.filter(p => p.status === 'Skipped').map(p => ({ ...p.student.toObject(), status: 'Skipped', title: p.presentationTitle }));
-    absentStudents = presentations.filter(p => p.status === 'Absent').map(p => ({ ...p.student.toObject(), status: 'Absent', title: p.presentationTitle }));
-    redoStudents = presentations.filter(p => p.status === 'Redo').map(p => ({ ...p.student.toObject(), status: 'Redo', title: p.presentationTitle }));
-    
+    const presentedStudentIds = new Set(presentations.map(p => p.studentId));
+
+    allStudents.sort(numericRollNoSort);
+    const pendingStudents = allStudents.filter(s => !presentedStudentIds.has(s.id));
+
+    // Build enriched skipped/absent/redo lists
+    for (const p of presentations) {
+      const s = allStudents.find(st => st.id === p.studentId);
+      if (!s) continue;
+      const entry = { ...s, status: p.status, title: p.presentationTitle };
+      if (p.status === 'Skipped') skippedStudents.push(entry);
+      else if (p.status === 'Absent') absentStudents.push(entry);
+      else if (p.status === 'Redo') redoStudents.push(entry);
+    }
+
     upcomingStudents = pendingStudents;
     if (upcomingStudents.length > 0) nextStudent = upcomingStudents[0];
-    
     estimatedRemaining = (upcomingStudents.length * settings.defaultDuration) || 0;
   }
-  
+
   return {
     currentStudent,
     nextStudent,
@@ -89,28 +113,34 @@ export const getQueueState = async () => {
     redoStudents,
     presentationOrder: currentPresentationOrder,
     estimatedRemaining,
-    duration: settings.defaultDuration
+    duration: settings.defaultDuration,
   };
 };
 
-export const getWorkflowState = async () => {
-  const { settings, activePeriod } = await getSystemState();
+// ─── Workflow State ───────────────────────────────────────────────────────────
+
+export const getWorkflowState = async (prefetchedSettings = null) => {
+  const { settings, activePeriod, ttInfo } = await getSystemState(prefetchedSettings);
   let nextStudent = null;
   let remainingCount = 0;
   let completedCount = 0;
-
-  const totalStudents = await Student.countDocuments();
+  let totalStudents = 0;
 
   if (settings.currentCycle) {
-    const presented = await Presentation.find({ cycle: settings.currentCycle._id });
-    const presentedIds = presented.map(p => p.student.toString());
+    const [presented, allStudents] = await Promise.all([
+      Presentation.find({ cycleId: settings.currentCycle.id }),
+      Student.findAll()
+    ]);
     
+    totalStudents = allStudents.length;
+    const presentedStudentIds = new Set(presented.map(p => p.studentId));
     completedCount = presented.filter(p => p.status === 'Completed').length;
     remainingCount = totalStudents - completedCount;
 
-    nextStudent = await Student.findOne({ _id: { $nin: presentedIds } })
-      .collation({ locale: 'en', numericOrdering: true })
-      .sort({ rollNo: 1 });
+    allStudents.sort(numericRollNoSort);
+    nextStudent = allStudents.find(s => !presentedStudentIds.has(s.id)) || null;
+  } else {
+    totalStudents = await Student.countDocuments();
   }
 
   return {
@@ -122,9 +152,11 @@ export const getWorkflowState = async () => {
     currentSubject: activePeriod?.subject || null,
     currentFaculty: activePeriod?.faculty || settings.defaultFaculty || 'Navyamol K T',
     currentCycle: settings.currentCycle,
-    todaysSchedule: (await getCurrentTimetableInfo()).periods || []
+    todaysSchedule: ttInfo?.periods || [],
   };
 };
+
+// ─── Presentation Controls ────────────────────────────────────────────────────
 
 export const startPresentation = async (studentId) => {
   const { settings, activePeriod } = await getSystemState();
@@ -134,53 +166,76 @@ export const startPresentation = async (studentId) => {
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
 
-  const orderCount = await Presentation.countDocuments({ cycle: settings.currentCycle._id, subject: activePeriod.subject });
+  const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
   const presentation = await Presentation.create({
-    student: student._id,
-    cycle: settings.currentCycle._id,
+    studentId: student.id,
+    cycleId: settings.currentCycle.id,
     subject: activePeriod.subject,
     faculty: activePeriod.faculty,
     status: 'Pending',
     presentationOrder: orderCount + 1,
-    presentationDate: new Date()
+    presentationDate: new Date(),
   });
 
-  settings.activeSession = {
-    presentation: presentation._id,
-    state: 'Live',
-    startedAt: new Date(),
-    accumulatedTime: 0,
-    lastUnpausedAt: new Date()
-  };
-  await settings.save();
+  let updatedSettings = await Settings.updateDoc({
+    activeSession: {
+      presentationId: presentation.id,
+      presentation: presentation.id, // compatibility
+      state: 'Live',
+      startedAt: new Date(),
+      accumulatedTime: 0,
+      lastUnpausedAt: new Date(),
+    },
+  });
 
-  return await getWorkflowState();
+  return await getWorkflowState(updatedSettings);
 };
 
 export const pausePresentation = async () => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  let settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
   if (settings.activeSession.state !== 'Live') throw new AppError('Presentation is not live', 400);
 
   const now = new Date();
-  const timeSinceUnpause = (now - settings.activeSession.lastUnpausedAt) / 1000;
-  
-  settings.activeSession.accumulatedTime += timeSinceUnpause;
-  settings.activeSession.state = 'Paused';
-  await settings.save();
+  const timeSinceUnpause = (now - new Date(settings.activeSession.lastUnpausedAt)) / 1000;
+  const accumulated = (settings.activeSession.accumulatedTime || 0) + timeSinceUnpause;
 
-  return await getWorkflowState();
+  settings = await Settings.updateDoc({
+    activeSession: {
+      ...settings.activeSession,
+      accumulatedTime: accumulated,
+      state: 'Paused',
+    },
+  });
+
+  // Return only the session snapshot — frontend handles UI state optimistically.
+  // Avoids 2 extra Firestore reads (getWorkflowState) that the frontend discards.
+  return {
+    status: 'Paused',
+    elapsed: Math.round(accumulated),
+    duration: settings.defaultDuration,
+  };
 };
 
 export const resumePresentation = async () => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  let settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
   if (settings.activeSession.state !== 'Paused') throw new AppError('Presentation is not paused', 400);
 
-  settings.activeSession.state = 'Live';
-  settings.activeSession.lastUnpausedAt = new Date();
-  await settings.save();
+  settings = await Settings.updateDoc({
+    activeSession: {
+      ...settings.activeSession,
+      state: 'Live',
+      lastUnpausedAt: new Date(),
+    },
+  });
 
-  return await getWorkflowState();
+  // Return only the session snapshot — frontend handles UI state optimistically.
+  // Avoids 2 extra Firestore reads (getWorkflowState) that the frontend discards.
+  return {
+    status: 'Live',
+    elapsed: Math.round(settings.activeSession.accumulatedTime || 0),
+    duration: settings.defaultDuration,
+  };
 };
 
 export const finishPresentation = async () => {
@@ -189,44 +244,52 @@ export const finishPresentation = async () => {
     throw new AppError('No active presentation to finish', 400);
   }
 
-  let finalDuration = settings.activeSession.accumulatedTime;
+  let finalDuration = settings.activeSession.accumulatedTime || 0;
   if (settings.activeSession.state === 'Live') {
     const now = new Date();
-    finalDuration += (now - settings.activeSession.lastUnpausedAt) / 1000;
+    finalDuration += (now - new Date(settings.activeSession.lastUnpausedAt)) / 1000;
   }
 
-  settings.activeSession.accumulatedTime = finalDuration;
-  settings.activeSession.state = 'Evaluating';
-  await settings.save();
+  let updatedSettings = await Settings.updateDoc({
+    activeSession: {
+      ...settings.activeSession,
+      accumulatedTime: finalDuration,
+      state: 'Evaluating',
+    },
+  });
 
-  return await getWorkflowState();
+  return await getWorkflowState(updatedSettings);
 };
 
 export const submitEvaluation = async (evaluationData) => {
   const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
   if (settings.activeSession.state !== 'Evaluating') throw new AppError('System is not in evaluating state', 400);
 
-  const presentation = await Presentation.findById(settings.activeSession.presentation);
+  const presentationId = settings.activeSession.presentationId;
+  const presentation = await Presentation.findById(presentationId);
   if (!presentation) throw new AppError('Presentation record not found', 404);
 
-  presentation.overallRating = evaluationData.overallRating;
-  presentation.feedbackTags = evaluationData.feedbackTags || [];
-  presentation.feedback = evaluationData.feedback || '';
-  presentation.presentationTitle = evaluationData.presentationTitle || '';
-  presentation.actualDuration = Math.round(settings.activeSession.accumulatedTime);
-  presentation.status = evaluationData.status || 'Completed';
-  await presentation.save();
+  await Presentation.findByIdAndUpdate(presentationId, {
+    overallRating: evaluationData.overallRating,
+    feedbackTags: evaluationData.feedbackTags || [],
+    feedback: evaluationData.feedback || '',
+    presentationTitle: evaluationData.presentationTitle || '',
+    actualDuration: Math.round(settings.activeSession.accumulatedTime || 0),
+    status: evaluationData.status || 'Completed',
+  });
 
-  settings.activeSession = {
-    presentation: null,
-    state: 'Idle',
-    startedAt: null,
-    accumulatedTime: 0,
-    lastUnpausedAt: null
-  };
-  await settings.save();
+  let updatedSettings = await Settings.updateDoc({
+    activeSession: {
+      presentationId: null,
+      presentation: null,
+      state: 'Idle',
+      startedAt: null,
+      accumulatedTime: 0,
+      lastUnpausedAt: null,
+    },
+  });
 
-  return await getWorkflowState();
+  return await getWorkflowState(updatedSettings);
 };
 
 export const skipPresentation = async (studentId) => {
@@ -236,16 +299,16 @@ export const skipPresentation = async (studentId) => {
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
 
-  const orderCount = await Presentation.countDocuments({ cycle: settings.currentCycle._id, subject: activePeriod.subject });
+  const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
   await Presentation.create({
-    student: student._id,
-    cycle: settings.currentCycle._id,
+    studentId: student.id,
+    cycleId: settings.currentCycle.id,
     subject: activePeriod.subject,
     faculty: activePeriod.faculty,
     status: 'Skipped',
     presentationOrder: orderCount + 1,
-    presentationDate: new Date()
+    presentationDate: new Date(),
   });
 
   return await getQueueState();
@@ -258,16 +321,16 @@ export const markAbsent = async (studentId) => {
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
 
-  const orderCount = await Presentation.countDocuments({ cycle: settings.currentCycle._id, subject: activePeriod.subject });
+  const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
   await Presentation.create({
-    student: student._id,
-    cycle: settings.currentCycle._id,
+    studentId: student.id,
+    cycleId: settings.currentCycle.id,
     subject: activePeriod.subject,
     faculty: activePeriod.faculty,
     status: 'Absent',
     presentationOrder: orderCount + 1,
-    presentationDate: new Date()
+    presentationDate: new Date(),
   });
 
   return await getQueueState();
@@ -276,25 +339,49 @@ export const markAbsent = async (studentId) => {
 export const skipEvaluation = async () => {
   const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
   if (settings.activeSession.state !== 'Evaluating') throw new AppError('System is not in evaluating state', 400);
-  const presentation = await Presentation.findById(settings.activeSession.presentation);
-  if (presentation) {
-    presentation.status = 'Completed';
-    presentation.actualDuration = Math.round(settings.activeSession.accumulatedTime);
-    await presentation.save();
+
+  const presentationId = settings.activeSession.presentationId;
+  if (presentationId) {
+    await Presentation.findByIdAndUpdate(presentationId, {
+      status: 'Completed',
+      actualDuration: Math.round(settings.activeSession.accumulatedTime || 0),
+    });
   }
-  settings.activeSession = { presentation: null, state: 'Idle', startedAt: null, accumulatedTime: 0, lastUnpausedAt: null };
-  await settings.save();
-  return await getWorkflowState();
+
+  let updatedSettings = await Settings.updateDoc({
+    activeSession: {
+      presentationId: null,
+      presentation: null,
+      state: 'Idle',
+      startedAt: null,
+      accumulatedTime: 0,
+      lastUnpausedAt: null,
+    },
+  });
+
+  return await getWorkflowState(updatedSettings);
 };
 
 export const resetSession = async () => {
   const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
-  if (settings.activeSession.presentation && settings.activeSession.state !== 'Evaluating') {
-    await Presentation.findByIdAndDelete(settings.activeSession.presentation);
+  const presentationId = settings.activeSession.presentationId;
+
+  if (presentationId && settings.activeSession.state !== 'Evaluating') {
+    await Presentation.findByIdAndDelete(presentationId);
   }
-  settings.activeSession = { presentation: null, state: 'Idle', startedAt: null, accumulatedTime: 0, lastUnpausedAt: null };
-  await settings.save();
-  return await getWorkflowState();
+
+  let updatedSettings = await Settings.updateDoc({
+    activeSession: {
+      presentationId: null,
+      presentation: null,
+      state: 'Idle',
+      startedAt: null,
+      accumulatedTime: 0,
+      lastUnpausedAt: null,
+    },
+  });
+
+  return await getWorkflowState(updatedSettings);
 };
 
 export const overrideActiveStudent = async (studentId) => {
@@ -305,33 +392,57 @@ export const overrideActiveStudent = async (studentId) => {
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
 
-  let presentation = await Presentation.findOne({ student: student._id, cycle: settings.currentCycle._id, subject: activePeriod.subject });
+  let presentation = await Presentation.findOne({
+    studentId: student.id,
+    cycleId: settings.currentCycle.id,
+    subject: activePeriod.subject,
+  });
 
   if (presentation) {
-    presentation.status = 'Pending';
-    presentation.presentationDate = new Date();
-    await presentation.save();
+    await Presentation.findByIdAndUpdate(presentation.id, {
+      status: 'Pending',
+      presentationDate: new Date(),
+    });
+    presentation = await Presentation.findById(presentation.id);
   } else {
-    const orderCount = await Presentation.countDocuments({ cycle: settings.currentCycle._id, subject: activePeriod.subject });
+    const orderCount = await Presentation.countDocuments({
+      cycleId: settings.currentCycle.id,
+      subject: activePeriod.subject,
+    });
     presentation = await Presentation.create({
-      student: student._id,
-      cycle: settings.currentCycle._id,
+      studentId: student.id,
+      cycleId: settings.currentCycle.id,
       subject: activePeriod.subject,
       faculty: activePeriod.faculty,
       status: 'Pending',
       presentationOrder: orderCount + 1,
-      presentationDate: new Date()
+      presentationDate: new Date(),
     });
   }
 
-  settings.activeSession = {
-    presentation: presentation._id,
-    state: 'Live',
-    startedAt: new Date(),
-    accumulatedTime: 0,
-    lastUnpausedAt: new Date()
-  };
-  await settings.save();
+  let updatedSettings = await Settings.updateDoc({
+    activeSession: {
+      presentationId: presentation.id,
+      presentation: presentation.id,
+      state: 'Live',
+      startedAt: new Date(),
+      accumulatedTime: 0,
+      lastUnpausedAt: new Date(),
+    },
+  });
 
-  return await getWorkflowState();
+  return await getWorkflowState(updatedSettings);
 };
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+
+function numericRollNoSort(a, b) {
+  const extractNum = (s) => {
+    const match = (s?.rollNo || '').match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+  };
+  const na = extractNum(a);
+  const nb = extractNum(b);
+  if (na !== nb) return na - nb;
+  return (a.rollNo || '').localeCompare(b.rollNo || '');
+}

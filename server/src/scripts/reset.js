@@ -1,36 +1,53 @@
-import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import { Student, Presentation, Timetable, Settings, Cycle, Override } from '../models/index.js';
-import connectDB from '../config/db.js';
-
 dotenv.config();
+
+import '../config/firebase.js';
+import { db } from '../config/firebase.js';
+
+const COLLECTIONS = ['students', 'presentations', 'cycles', 'overrides'];
+// Note: settings and timetables are intentionally preserved
+
+const deleteCollection = async (colName) => {
+  const snap = await db.collection(colName).get();
+  if (snap.empty) {
+    console.log(`ℹ  ${colName}: already empty`);
+    return;
+  }
+  const BATCH_SIZE = 400;
+  for (let i = 0; i < snap.docs.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    snap.docs.slice(i, i + BATCH_SIZE).forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
+  console.log(`✅ Cleared ${colName} (${snap.size} docs deleted)`);
+};
 
 const resetData = async () => {
   try {
-    await connectDB();
-    console.log('MongoDB Connected. Resetting data...');
+    console.log('Firestore connected. Resetting data...');
 
-    await Student.deleteMany({});
-    console.log('✅ Cleared Students collection');
+    for (const col of COLLECTIONS) {
+      await deleteCollection(col);
+    }
 
-    await Presentation.deleteMany({});
-    console.log('✅ Cleared Presentations collection');
+    // Also reset the activeSession in settings without deleting settings
+    const settingsRef = db.collection('settings').doc('GLOBAL_SETTINGS');
+    const settingsSnap = await settingsRef.get();
+    if (settingsSnap.exists) {
+      await settingsRef.update({
+        'activeSession.presentationId': null,
+        'activeSession.state': 'Idle',
+        'activeSession.startedAt': null,
+        'activeSession.accumulatedTime': 0,
+        'activeSession.lastUnpausedAt': null,
+      });
+      console.log('✅ Settings: activeSession reset to Idle (settings preserved)');
+    }
 
-    await Timetable.deleteMany({});
-    console.log('✅ Cleared Timetable collection');
-
-    await Cycle.deleteMany({});
-    console.log('✅ Cleared Cycles collection');
-
-    await Override.deleteMany({});
-    console.log('✅ Cleared Overrides collection');
-
-    // Note: Settings is NOT cleared as per requirements
-
-    console.log('Database reset successfully! Only Settings remain.');
-    process.exit();
+    console.log('\n✅ Firestore reset successfully! Settings and Timetables preserved.');
+    process.exit(0);
   } catch (err) {
-    console.error('Error with data import: ', err);
+    console.error('❌ Error during reset:', err);
     process.exit(1);
   }
 };

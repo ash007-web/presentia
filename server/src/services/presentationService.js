@@ -1,4 +1,17 @@
-import { Presentation } from '../models/index.js';
+import { Presentation, Student, Cycle } from '../models/index.js';
+
+/**
+ * Enrich a presentation with populated student and cycle objects.
+ * Mirrors what Mongoose `.populate('student cycle')` did.
+ */
+const populatePresentation = async (p) => {
+  if (!p) return null;
+  const [student, cycle] = await Promise.all([
+    p.studentId ? Student.findById(p.studentId) : Promise.resolve(null),
+    p.cycleId ? Cycle.findById(p.cycleId) : Promise.resolve(null),
+  ]);
+  return { ...p, student, cycle };
+};
 
 export const createPresentation = async (data) => {
   return await Presentation.create(data);
@@ -8,29 +21,45 @@ export const getPresentations = async (query) => {
   const { student, cycle, status, subject, page = 1, limit = 10, sort = 'presentationOrder' } = query;
   const filterQuery = {};
 
-  if (student) filterQuery.student = student;
-  if (cycle) filterQuery.cycle = cycle;
+  // Use Firestore field names
+  if (student) filterQuery.studentId = student;
+  if (cycle) filterQuery.cycleId = cycle;
   if (status) filterQuery.status = status;
   if (subject) filterQuery.subject = subject;
 
-  const skip = (page - 1) * limit;
-  const presentations = await Presentation.find(filterQuery)
-    .populate('student cycle')
-    .sort(sort)
-    .skip(skip)
-    .limit(Number(limit));
-    
-  const total = await Presentation.countDocuments(filterQuery);
+  let presentations = await Presentation.find(filterQuery);
 
-  return { presentations, total, page: Number(page), limit: Number(limit) };
+  // Sort in memory
+  const desc = sort.startsWith('-');
+  const sortField = desc ? sort.slice(1) : sort;
+  presentations.sort((a, b) => {
+    const av = a[sortField] ?? 0;
+    const bv = b[sortField] ?? 0;
+    if (av < bv) return desc ? 1 : -1;
+    if (av > bv) return desc ? -1 : 1;
+    return 0;
+  });
+
+  const total = presentations.length;
+  const pageNum = Number(page);
+  const limitNum = Number(limit);
+  const start = (pageNum - 1) * limitNum;
+  const paginated = presentations.slice(start, start + limitNum);
+
+  // Populate student and cycle for each presentation
+  const populated = await Promise.all(paginated.map(populatePresentation));
+
+  return { presentations: populated, total, page: pageNum, limit: limitNum };
 };
 
 export const getPresentationById = async (id) => {
-  return await Presentation.findById(id).populate('student cycle');
+  const p = await Presentation.findById(id);
+  return populatePresentation(p);
 };
 
 export const updatePresentation = async (id, data) => {
-  return await Presentation.findByIdAndUpdate(id, data, { new: true, runValidators: true }).populate('student cycle');
+  const p = await Presentation.findByIdAndUpdate(id, data, { new: true });
+  return populatePresentation(p);
 };
 
 export const deletePresentation = async (id) => {

@@ -3,19 +3,15 @@ import cors from 'cors';
 import apiRoutes from './routes/index.js';
 import errorHandler from './middleware/errorHandler.js';
 
-import connectDB from './config/db.js';
+// Initialize Firebase Admin SDK (Firestore) on startup
+import './config/firebase.js';
 
 const app = express();
-
-// Ensure DB is connected for serverless environments
-app.use(async (req, res, next) => {
-  await connectDB();
-  next();
-});
 
 // Middleware
 const allowedOrigins = [
   'http://localhost:5173',
+  'http://localhost:5174',
   'http://localhost:3000'
 ];
 
@@ -35,7 +31,7 @@ app.use(express.json());
 app.get('/', (req, res) => {
   res.json({
     status: "ok",
-    message: "Presentia Backend Running"
+    message: "Presentia Backend Running (Firestore)"
   });
 });
 
