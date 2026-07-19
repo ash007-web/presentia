@@ -449,7 +449,7 @@ const Presentation: React.FC = () => {
   const canFinish = (everStarted || timerRef.current.overtime > 0) && !evalOpen;
 
   if (loading) return <AnimatedLoadingModal type="page" />;
-  if (error) return <div style={{ textAlign: 'center', marginTop: 100 }}><h3 style={{color:'var(--primary-red)'}}>Failed to load</h3><p>{error}</p><button className="btn-primary" onClick={loadState}>Retry</button></div>;
+  if (error) return <div style={{ textAlign: 'center', marginTop: 100 }}><h3 style={{color:'var(--primary-red)'}}>Failed to load</h3><p>{error}</p><button className="btn-primary" onClick={() => loadState(true)}>Retry</button></div>;
 
   return (
     <>
