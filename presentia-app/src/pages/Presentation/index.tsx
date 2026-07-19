@@ -81,8 +81,6 @@ const Presentation: React.FC = () => {
   const [finishing, setFinishing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [timeLeft, setTimeLeft] = useState(totalSeconds);
-  const [overtime, setOvertime] = useState(0);
   const [running, setRunning] = useState(false);
   const [stage, setStage] = useState<'normal'|'warning'|'danger'>('normal');
   const [timerState, setTimerState] = useState('Ready');
@@ -102,6 +100,13 @@ const Presentation: React.FC = () => {
   const ringRef = useRef<SVGCircleElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const settingsRef = useRef<any>(null);
+  const timerRef = useRef({ timeLeft: 120, overtime: 0 });
+  const timerDisplayRef = useRef<HTMLDivElement>(null);
+
+  const syncTimerUI = (tl: number, ot: number) => {
+    timerRef.current = { timeLeft: tl, overtime: ot };
+    if (timerDisplayRef.current) timerDisplayRef.current.innerText = fmtTime(tl, ot);
+  };
 
   useEffect(() => {
     if (settings?.bellEnabled && settings.bellSound && settings.bellSound !== 'none') {
@@ -113,8 +118,14 @@ const Presentation: React.FC = () => {
     }
   }, [settings?.bellEnabled, settings?.bellSound, settings?.volume]);
 
-  const loadState = () => {
-    setLoading(true); setError('');
+  // isInitialLoad=true: shows full-page overlay and takes full control of timer state.
+  // isInitialLoad=false (background sync): only updates workflow/queue data.
+  //   It must NOT touch the interval if the timer is already running — that was
+  //   the regression: calling loadState() after start() was killing and re-creating
+  //   the interval, causing inconsistent timer starts.
+  const loadState = (isInitialLoad = false) => {
+    if (isInitialLoad) setLoading(true);
+    setError('');
     Promise.all([
       import('../../services/presentationService').then(m => m.getSession()),
       import('../../services/presentationService').then(m => m.getQueue()),
@@ -122,55 +133,76 @@ const Presentation: React.FC = () => {
     ]).then(([sessionRes, queueRes, settingsData]) => {
       const session = sessionRes.data;
       const queue = queueRes.data;
-      
+
+      // Always update the workflow and settings (student name, queue, bell settings).
       setWorkflow({ session, queue });
       setSettings(settingsData);
       settingsRef.current = settingsData;
       const duration = session.duration || queue.duration || settingsData?.defaultDuration || 120;
       setTotalSeconds(duration);
-      
+
+      if (!isInitialLoad) {
+        // Background sync: workflow/settings are updated above.
+        // Never touch the running interval — the optimistic timer is correct.
+        // Only reconcile timer state if the backend reports something unexpected
+        // (e.g. another client changed the session, or an error occurred).
+        if (!session.presentationRunning && backendStateRef.current === 'Live') {
+          // Backend no longer reports a live session but we think we're live —
+          // something went wrong server-side; stop the timer.
+          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          setRunning(false);
+          backendStateRef.current = session.status || 'Idle';
+          setTimerState(session.status === 'Paused' ? 'Paused' : 'Ready');
+          setStageStatus(session.status === 'Paused' ? 'Paused' : 'Ready');
+        }
+        return; // All other timer state is already managed optimistically.
+      }
+
+      // Initial load: take full control of timer state from server.
       if (session.presentationRunning) {
-        // Clear any stale interval first
-        if (intervalRef.current) clearInterval(intervalRef.current);
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         const elapsed = session.elapsed || 0;
         const remaining = Math.max(0, duration - elapsed);
         const ot = elapsed > duration ? elapsed - duration : 0;
         setRunning(true);
         setEverStarted(true);
-        setTimeLeft(remaining);
-        setOvertime(ot);
+        syncTimerUI(remaining, ot);
         setTimerState(ot > 0 ? 'Overtime' : 'Presenting');
         setStageStatus('Presenting');
         backendStateRef.current = 'Live';
-        // Restart interval so timer ticks after page refresh
         intervalRef.current = setInterval(tick, 1000);
       } else if (session.status === 'Paused') {
-        if (intervalRef.current) clearInterval(intervalRef.current);
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         setRunning(false);
         setTimerState('Paused'); setStageStatus('Paused');
-        setTimeLeft(Math.max(0, duration - session.elapsed));
-        setOvertime(session.elapsed > duration ? session.elapsed - duration : 0);
+        const tl = Math.max(0, duration - session.elapsed);
+        const ot = session.elapsed > duration ? session.elapsed - duration : 0;
+        syncTimerUI(tl, ot);
         backendStateRef.current = 'Paused';
       } else if (session.status === 'Evaluating') {
-        if (intervalRef.current) clearInterval(intervalRef.current);
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         setRunning(false);
         setTimerState('Finished'); setStageStatus('Finished');
         backendStateRef.current = 'Evaluating';
         setEvalOpen(true);
       } else {
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        setTimeLeft(duration);
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        syncTimerUI(duration, 0);
         backendStateRef.current = 'Idle';
       }
       setLoading(false);
     }).catch(err => {
       setError(err.message || 'Failed to load presentation engine');
-      setLoading(false);
+      if (isInitialLoad) setLoading(false);
     });
   };
 
   useEffect(() => {
-    loadState();
+    loadState(true);
+    // Cleanup: kill the timer interval when the component unmounts (navigation away).
+    return () => {
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    };
   }, []);
 
 
@@ -202,57 +234,60 @@ const Presentation: React.FC = () => {
   }, [totalSeconds]);
 
   const tick = useCallback(() => {
-    setTimeLeft(prev => {
-      if (prev > 0) {
-        const next = prev - 1;
-        updateStage(next, 0);
-        updateRing(next, 0);
-        
-        const sets = settingsRef.current;
-        if (sets?.bellEnabled && audioRef.current) {
-          if (sets.warnTone && next === (sets.warningThreshold || 45)) {
-            audioRef.current.currentTime = 0;
-            audioRef.current.play().catch(e => console.log('Audio play failed', e));
-          }
-          if (sets.alarmTone && next === 0) {
-            audioRef.current.currentTime = 0;
-            audioRef.current.play().catch(e => console.log('Audio play failed', e));
-          }
+    const prev = timerRef.current.timeLeft;
+    const ot = timerRef.current.overtime;
+    if (prev > 0) {
+      const next = prev - 1;
+      syncTimerUI(next, 0);
+      updateStage(next, 0);
+      updateRing(next, 0);
+      
+      const sets = settingsRef.current;
+      if (sets?.bellEnabled && audioRef.current) {
+        if (sets.warnTone && next === (sets.warningThreshold || 45)) {
+          audioRef.current.currentTime = 0;
+          audioRef.current.play().catch(e => console.log('Audio play failed', e));
         }
-        
-        return next;
-      } else {
-        setOvertime(o => {
-          const no = o + 1;
-          setStage('danger');
-          updateRing(0, no);
-          return no;
-        });
-        return 0;
+        if (sets.alarmTone && next === 0) {
+          audioRef.current.currentTime = 0;
+          audioRef.current.play().catch(e => console.log('Audio play failed', e));
+        }
       }
-    });
+    } else {
+      const no = ot + 1;
+      syncTimerUI(0, no);
+      setStage('danger');
+      updateRing(0, no);
+    }
   }, [updateStage, updateRing]);
 
   const start = async () => {
     if (running || evalOpen || starting) return;
     setStarting(true);
+
+    // Capture the prior state BEFORE the await so the resume branch works.
+    const priorState = backendStateRef.current;
+
     try {
-      if (backendStateRef.current === 'Paused') {
+      if (priorState === 'Paused') {
         await resumePresentation();
       } else {
         await startPresentation(workflow?.queue?.nextStudent?._id);
       }
+      // API confirmed — now start the timer. No rollback risk.
       setRunning(true); setEverStarted(true);
-      setTimerState(overtime > 0 ? 'Overtime' : 'Presenting');
+      setTimerState(timerRef.current.overtime > 0 ? 'Overtime' : 'Presenting');
       setStageStatus('Presenting');
       backendStateRef.current = 'Live';
+      if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(tick, 1000);
-      notify('Session is Live', `Presentation started.`, 'high');
-      loadState();
       setStarting(false);
+      notify('Session is Live', `Presentation started.`, 'high');
+      // Silent background sync to update student name/queue after start.
+      loadState();
     } catch(e) { 
-      console.error(e); 
-      setStarting(false); 
+      console.error(e);
+      setStarting(false);
     }
   };
 
@@ -261,6 +296,7 @@ const Presentation: React.FC = () => {
     setStarting(true);
     try {
       await overrideActiveStudent(studentId);
+      // API confirmed — now start the timer and close the modal.
       setSelectModalOpen(false);
       setRunning(true); setEverStarted(true);
       setTimerState('Presenting');
@@ -268,9 +304,10 @@ const Presentation: React.FC = () => {
       backendStateRef.current = 'Live';
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(tick, 1000);
-      notify('Session is Live', `Presentation resumed for selected student.`, 'high');
-      loadState();
       setStarting(false);
+      notify('Session is Live', `Presentation resumed for selected student.`, 'high');
+      // Silent background sync to update student name/queue.
+      loadState();
     } catch (e) {
       console.error(e);
       notify('Error', 'Failed to select student.', 'high');
@@ -279,23 +316,36 @@ const Presentation: React.FC = () => {
   };
 
   const pause = async () => {
-    if (!running) return; 
+    if (!running) return;
+
+    // Update UI immediately — timer stops before API round-trip.
+    setRunning(false);
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    setTimerState('Paused'); setStageStatus('Paused');
+    backendStateRef.current = 'Paused';
+    notify('Session Paused', 'The presentation timer has been paused.', 'normal');
+
     try {
       await pausePresentation();
-      setRunning(false);
+      // No loadState() needed — UI is already correct.
+    } catch(e) {
+      console.error(e);
+      // Rollback: resume the timer if the pause failed
+      setRunning(true);
+      backendStateRef.current = 'Live';
+      setTimerState('Presenting'); setStageStatus('Presenting');
       if (intervalRef.current) clearInterval(intervalRef.current);
-      setTimerState('Paused'); setStageStatus('Paused');
-      backendStateRef.current = 'Paused';
-      loadState();
-      notify('Session Paused', 'The presentation timer has been paused.', 'normal');
-    } catch(e) { console.error(e); }
+      intervalRef.current = setInterval(tick, 1000);
+    }
   };
 
   const resetLocally = () => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    setRunning(false); setTimeLeft(totalSeconds); setOvertime(0);
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    setRunning(false);
+    syncTimerUI(totalSeconds, 0);
     setTimerState('Ready'); setStageStatus('Ready'); setStage('normal');
     setEverStarted(false);
+    backendStateRef.current = 'Idle';
     if (ringRef.current) ringRef.current.style.strokeDashoffset = '0';
   };
 
@@ -312,44 +362,38 @@ const Presentation: React.FC = () => {
   };
 
   const skip = async () => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     try {
       const { skipPresentation } = await import('../../services/presentationService');
       await skipPresentation(workflow?.queue?.nextStudent?._id);
       setRunning(false); setTimerState('Skipped'); setStageStatus('Skipped');
+      backendStateRef.current = 'Idle';
       notify('Student Skipped', `${workflow?.queue?.nextStudent?.name || 'Student'} was skipped and moved back in queue.`, 'low');
-      setTimeout(() => { loadState(); resetLocally(); }, 900);
+      setTimeout(() => { resetLocally(); loadState(); }, 900);
     } catch(e) { console.error(e); }
   };
 
   const markAbs = async () => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     try {
       const { markAbsent } = await import('../../services/presentationService');
       await markAbsent(workflow?.queue?.nextStudent?._id);
       setRunning(false); setTimerState('Absent'); setStageStatus('Absent');
+      backendStateRef.current = 'Idle';
       notify('Student Absent', `${workflow?.queue?.nextStudent?.name || 'Student'} marked absent.`, 'low');
-      setTimeout(() => { loadState(); resetLocally(); }, 900);
+      setTimeout(() => { resetLocally(); loadState(); }, 900);
     } catch(e) { console.error(e); }
   };
 
   const finish = async () => {
     if (finishing || evalOpen) return;
     setFinishing(true);
-    const startMs = Date.now();
     try {
       await finishPresentation();
-      
-      const elapsed = Date.now() - startMs;
-      if (elapsed < 400) {
-        await new Promise(r => setTimeout(r, 400 - elapsed));
-      }
-      
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setRunning(false); setTimerState('Finished'); setStageStatus('Finished');
       backendStateRef.current = 'Evaluating';
       notify('Evaluation Pending', 'Student evaluation is awaiting submission.', 'high');
-      
       setFinishing(false);
       openEval();
     } catch(e) { 
@@ -411,7 +455,7 @@ const Presentation: React.FC = () => {
 
   const ringColor = stage === 'danger' ? '#D71920' : stage === 'warning' ? '#E8963C' : '#4FA2CF';
   const timerColor = stage === 'danger' ? 'var(--primary-red)' : stage === 'warning' ? '#E8963C' : 'var(--ink)';
-  const canFinish = (everStarted || overtime > 0) && !evalOpen;
+  const canFinish = (everStarted || timerRef.current.overtime > 0) && !evalOpen;
 
   if (loading) return <AnimatedLoadingModal type="page" />;
   if (error) return <div style={{ textAlign: 'center', marginTop: 100 }}><h3 style={{color:'var(--primary-red)'}}>Failed to load</h3><p>{error}</p><button className="btn-primary" onClick={loadState}>Retry</button></div>;
@@ -602,8 +646,8 @@ const Presentation: React.FC = () => {
             <circle ref={ringRef} cx="200" cy="200" r="170" fill="none" strokeWidth="14" strokeLinecap="round" strokeDasharray="1068.14" strokeDashoffset="0" style={{ stroke: ringColor, transition: 'stroke-dashoffset 1s linear, stroke 1s ease' }}/>
           </svg>
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            <div className="num" style={{ fontSize: 'clamp(52px,7.5vw,92px)', fontWeight: 700, color: timerColor, transition: 'color 1s ease', letterSpacing: '-0.02em' }}>
-              {fmtTime(timeLeft, overtime)}
+            <div ref={timerDisplayRef} className="num" style={{ fontSize: 'clamp(52px,7.5vw,92px)', fontWeight: 700, color: timerColor, transition: 'color 1s ease', letterSpacing: '-0.02em' }}>
+              {fmtTime(timerRef.current.timeLeft, timerRef.current.overtime)}
             </div>
             <div style={{ fontSize: '12.5px', fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-faint)', marginTop: 8 }}>{timerState}</div>
           </div>

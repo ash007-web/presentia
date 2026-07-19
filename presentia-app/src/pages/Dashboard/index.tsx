@@ -141,7 +141,7 @@ const Dashboard: React.FC = () => {
               {[
                 { v: dashData?.completed || 0, l: 'Completed' },
                 { v: dashData?.remaining || 0, l: 'Remaining' },
-                { v: Math.floor((dashData?.activeSession?.accumulatedTime || 0) / 60), l: 'Mins elapsed' }
+                { v: Math.floor((dashData?.totalTimeTaken || 0) / 60), l: 'Mins elapsed' }
               ].map(s => (
                 <div key={s.l} style={{ background: 'rgba(255,255,255,0.55)', border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px' }}>
                   <div className="num" style={{ fontSize: 20, fontWeight: 700 }}><AnimatedNumber target={s.v} /></div>
