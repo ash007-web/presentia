@@ -142,20 +142,15 @@ const Presentation: React.FC = () => {
       setTotalSeconds(duration);
 
       if (!isInitialLoad) {
-        // Background sync: workflow/settings are updated above.
-        // Never touch the running interval — the optimistic timer is correct.
-        // Only reconcile timer state if the backend reports something unexpected
-        // (e.g. another client changed the session, or an error occurred).
+        // Background sync: only reconcile if backend diverged from our optimistic state.
         if (!session.presentationRunning && backendStateRef.current === 'Live') {
-          // Backend no longer reports a live session but we think we're live —
-          // something went wrong server-side; stop the timer.
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
           setRunning(false);
           backendStateRef.current = session.status || 'Idle';
           setTimerState(session.status === 'Paused' ? 'Paused' : 'Ready');
           setStageStatus(session.status === 'Paused' ? 'Paused' : 'Ready');
         }
-        return; // All other timer state is already managed optimistically.
+        return;
       }
 
       // Initial load: take full control of timer state from server.
@@ -274,7 +269,7 @@ const Presentation: React.FC = () => {
       } else {
         await startPresentation(workflow?.queue?.nextStudent?._id);
       }
-      // API confirmed — now start the timer. No rollback risk.
+      // API confirmed — now start the timer.
       setRunning(true); setEverStarted(true);
       setTimerState(timerRef.current.overtime > 0 ? 'Overtime' : 'Presenting');
       setStageStatus('Presenting');
@@ -283,8 +278,6 @@ const Presentation: React.FC = () => {
       intervalRef.current = setInterval(tick, 1000);
       setStarting(false);
       notify('Session is Live', `Presentation started.`, 'high');
-      // Silent background sync to update student name/queue after start.
-      loadState();
     } catch(e) { 
       console.error(e);
       setStarting(false);
@@ -306,8 +299,6 @@ const Presentation: React.FC = () => {
       intervalRef.current = setInterval(tick, 1000);
       setStarting(false);
       notify('Session is Live', `Presentation resumed for selected student.`, 'high');
-      // Silent background sync to update student name/queue.
-      loadState();
     } catch (e) {
       console.error(e);
       notify('Error', 'Failed to select student.', 'high');
