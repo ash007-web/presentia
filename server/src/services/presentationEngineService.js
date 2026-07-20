@@ -76,7 +76,7 @@ export const getQueueState = async () => {
     allStudentsPromise = Student.findAll();
   }
 
-  const [presentations, allStudents] = await Promise.all([
+  let [presentations, allStudents] = await Promise.all([
     presentationsPromise,
     allStudentsPromise,
     currentPresentationPromise
@@ -99,6 +99,18 @@ export const getQueueState = async () => {
       else if (p.status === 'Redo') redoStudents.push(entry);
     }
 
+    allStudents = allStudents.map(s => {
+      const p = presentations.find(pr => pr.studentId === s.id);
+      let status = 'Pending';
+      if (currentStudent && s.id === currentStudent.id) status = 'Current';
+      else if (p) status = p.status;
+      return {
+        ...s,
+        status,
+        title: p ? p.presentationTitle : ''
+      };
+    });
+
     upcomingStudents = pendingStudents;
     if (upcomingStudents.length > 0) nextStudent = upcomingStudents[0];
     estimatedRemaining = (upcomingStudents.length * settings.defaultDuration) || 0;
@@ -111,6 +123,7 @@ export const getQueueState = async () => {
     skippedStudents,
     absentStudents,
     redoStudents,
+    allStudents,
     presentationOrder: currentPresentationOrder,
     estimatedRemaining,
     duration: settings.defaultDuration,
@@ -156,6 +169,13 @@ export const getWorkflowState = async (prefetchedSettings = null) => {
   };
 };
 
+export const getUnifiedWorkflowState = async (settings = null) => {
+  return {
+    session: await getSessionState(settings),
+    queue: await getQueueState()
+  };
+};
+
 // ─── Presentation Controls ────────────────────────────────────────────────────
 
 export const startPresentation = async (studentId) => {
@@ -165,6 +185,19 @@ export const startPresentation = async (studentId) => {
   const period = activePeriod || ttInfo?.nextPeriod || null;
   if (!period) throw new AppError('No active period in timetable to start presentation', 400);
   if (settings.activeSession.state !== 'Idle') throw new AppError('A presentation is already active or evaluating', 400);
+
+  if (settings.activeSession.presentationId) {
+    let updatedSettings = await Settings.updateDoc({
+      activeSession: {
+        ...settings.activeSession,
+        state: 'Live',
+        startedAt: new Date(),
+        accumulatedTime: 0,
+        lastUnpausedAt: new Date(),
+      },
+    });
+    return await getUnifiedWorkflowState(updatedSettings);
+  }
 
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
@@ -192,7 +225,7 @@ export const startPresentation = async (studentId) => {
     },
   });
 
-  return await getWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings);
 };
 
 export const pausePresentation = async () => {
@@ -211,13 +244,8 @@ export const pausePresentation = async () => {
     },
   });
 
-  // Return only the session snapshot — frontend handles UI state optimistically.
-  // Avoids 2 extra Firestore reads (getWorkflowState) that the frontend discards.
-  return {
-    status: 'Paused',
-    elapsed: Math.round(accumulated),
-    duration: settings.defaultDuration,
-  };
+  // Return unified state to ensure UI sync
+  return await getUnifiedWorkflowState(settings);
 };
 
 export const resumePresentation = async () => {
@@ -232,13 +260,8 @@ export const resumePresentation = async () => {
     },
   });
 
-  // Return only the session snapshot — frontend handles UI state optimistically.
-  // Avoids 2 extra Firestore reads (getWorkflowState) that the frontend discards.
-  return {
-    status: 'Live',
-    elapsed: Math.round(settings.activeSession.accumulatedTime || 0),
-    duration: settings.defaultDuration,
-  };
+  // Return unified state to ensure UI sync
+  return await getUnifiedWorkflowState(settings);
 };
 
 export const finishPresentation = async () => {
@@ -261,7 +284,7 @@ export const finishPresentation = async () => {
     },
   });
 
-  return await getWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings);
 };
 
 export const submitEvaluation = async (evaluationData) => {
@@ -292,7 +315,7 @@ export const submitEvaluation = async (evaluationData) => {
     },
   });
 
-  return await getWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings);
 };
 
 export const skipPresentation = async (studentId) => {
@@ -301,6 +324,15 @@ export const skipPresentation = async (studentId) => {
 
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
+
+  const recentPresentation = await Presentation.findOne({
+    studentId: student.id,
+    cycleId: settings.currentCycle.id,
+    subject: activePeriod.subject,
+    status: 'Skipped',
+    presentationDate: { $gte: new Date(Date.now() - 10000) }
+  });
+  if (recentPresentation) return await getUnifiedWorkflowState();
 
   const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
@@ -314,7 +346,7 @@ export const skipPresentation = async (studentId) => {
     presentationDate: new Date(),
   });
 
-  return await getQueueState();
+  return await getUnifiedWorkflowState();
 };
 
 export const markAbsent = async (studentId) => {
@@ -323,6 +355,15 @@ export const markAbsent = async (studentId) => {
 
   const student = await Student.findById(studentId);
   if (!student) throw new AppError('Student not found', 404);
+
+  const recentPresentation = await Presentation.findOne({
+    studentId: student.id,
+    cycleId: settings.currentCycle.id,
+    subject: activePeriod.subject,
+    status: 'Absent',
+    presentationDate: { $gte: new Date(Date.now() - 10000) }
+  });
+  if (recentPresentation) return await getUnifiedWorkflowState();
 
   const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
@@ -336,7 +377,7 @@ export const markAbsent = async (studentId) => {
     presentationDate: new Date(),
   });
 
-  return await getQueueState();
+  return await getUnifiedWorkflowState();
 };
 
 export const skipEvaluation = async () => {
@@ -362,7 +403,7 @@ export const skipEvaluation = async () => {
     },
   });
 
-  return await getWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings);
 };
 
 export const resetSession = async () => {
@@ -384,7 +425,7 @@ export const resetSession = async () => {
     },
   });
 
-  return await getWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings);
 };
 
 export const overrideActiveStudent = async (studentId) => {
@@ -428,14 +469,14 @@ export const overrideActiveStudent = async (studentId) => {
     activeSession: {
       presentationId: presentation.id,
       presentation: presentation.id,
-      state: 'Live',
-      startedAt: new Date(),
+      state: 'Idle',
+      startedAt: null,
       accumulatedTime: 0,
-      lastUnpausedAt: new Date(),
+      lastUnpausedAt: null,
     },
   });
 
-  return await getWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings);
 };
 
 // ─── Utility ──────────────────────────────────────────────────────────────────

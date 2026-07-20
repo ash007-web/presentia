@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { Student } from '../models/index.js';
+import { Student, studentsCol, withUpdatedAt } from '../models/index.js';
 import { db } from '../config/firebase.js';
 import { Timestamp } from 'firebase-admin/firestore';
 
@@ -18,22 +18,17 @@ export const importStudentsFromExcel = async (buffer) => {
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return; // Skip header
     const rollNo = row.getCell(1).text?.toString().trim().toUpperCase();
-    const admissionNo = row.getCell(2).text?.toString().trim() || null;
-    const name = row.getCell(3).text?.toString().trim();
+    const presentationTitle = row.getCell(2).text?.toString().trim() || '';
 
     // Blank row detection
-    if (!rollNo && !name && !admissionNo) return;
+    if (!rollNo && !presentationTitle) return;
 
     if (!rollNo) {
       validationErrors.push(`Row ${rowNumber}: Missing Roll No`);
       return;
     }
-    if (!name) {
-      validationErrors.push(`Row ${rowNumber}: Missing Student Name`);
-      return;
-    }
 
-    rows.push({ rollNo, name, admissionNo, rowNumber });
+    rows.push({ rollNo, presentationTitle, rowNumber });
   });
 
   if (validationErrors.length > 0) {
@@ -59,26 +54,34 @@ export const importStudentsFromExcel = async (buffer) => {
   
   // Fetch all existing students and filter in memory (Firestore 'in' supports up to 30 items)
   const allStudents = await Student.findAll();
-  const existingRollNos = new Set(allStudents.map(s => s.rollNo));
+  const existingStudentsMap = new Map(allStudents.map(s => [s.rollNo, s]));
 
   let importedCount = 0;
   let skippedCount = 0;
-  const docsToInsert = [];
+  
+  const batch = db.batch();
+  let hasUpdates = false;
 
   for (const row of rows) {
-    if (existingRollNos.has(row.rollNo)) {
-      skippedCount++;
-    } else {
-      docsToInsert.push({ rollNo: row.rollNo, name: row.name, admissionNo: row.admissionNo });
+    const existingStudent = existingStudentsMap.get(row.rollNo);
+    if (existingStudent) {
+      const ref = studentsCol().doc(existingStudent.id);
+      batch.update(ref, withUpdatedAt({ title: row.presentationTitle }));
+      hasUpdates = true;
       importedCount++;
+    } else {
+      skippedCount++;
     }
   }
 
-  if (docsToInsert.length > 0) {
+  if (hasUpdates) {
     try {
-      await Student.insertMany(docsToInsert);
+      await batch.commit();
+      // Since we updated students directly, we should clear the cache as the legacy method did
+      const { deleteCache } = await import('../utils/cache.js');
+      deleteCache('Student:findAll');
     } catch (error) {
-      return { importedCount: 0, skippedCount: 0, errors: [`Batch insert failed: ${error.message}`], success: false };
+      return { importedCount: 0, skippedCount: 0, errors: [`Batch update failed: ${error.message}`], success: false };
     }
   }
 

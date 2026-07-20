@@ -61,7 +61,7 @@ export const getStudents = async (query) => {
     const rp = recentMap[st.id];
     return {
       ...st,
-      title: rp?.presentationTitle || 'No presentation',
+      title: rp?.presentationTitle || st.title || 'No presentation',
       status: rp?.status || 'Pending',
       overallRating: rp?.overallRating ?? null,
       subject: rp?.subject ?? null,
@@ -109,7 +109,7 @@ export const getStudentsOverview = async (cycleId) => {
     const rp = recentMap[st.id];
     return {
       ...st,
-      presentationTitle: rp?.presentationTitle || 'No presentation',
+      presentationTitle: rp?.presentationTitle || st.title || 'No presentation',
       status: rp?.status || 'Pending',
       overallRating: rp?.overallRating ?? null,
     };
