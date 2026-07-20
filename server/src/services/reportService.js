@@ -95,7 +95,7 @@ export const generateReport = async (filters) => {
       rollNo: p.student?.rollNo || '',
       admissionNo: p.student?.admissionNo || '',
       name: p.student?.name || '',
-      title: p.presentationTitle || '',
+      title: p.presentationTitle || p.student?.title || 'No presentation',
       subject: p.subject || '',
       faculty: p.faculty || '',
       duration: p.actualDuration || 0,
