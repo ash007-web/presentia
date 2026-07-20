@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { startPresentation, pausePresentation, resumePresentation, finishPresentation, submitEvaluation, skipEvaluation, resetSession as apiResetSession, overrideActiveStudent } from '../../services/presentationService';
+import { startPresentation, pausePresentation, resumePresentation, finishPresentation, submitEvaluation, skipEvaluation, resetSession as apiResetSession } from '../../services/presentationService';
 import { CRITERIA_NAMES } from '../../utils/constants';
 import { pad } from '../../utils/helpers';
 import { notify } from '../../utils/notify';
@@ -94,7 +94,7 @@ const Presentation: React.FC = () => {
   const [everStarted, setEverStarted] = useState(false);
   const [selectModalOpen, setSelectModalOpen] = useState(false);
   const [settings, setSettings] = useState<any>(null);
-  
+  const [searchQuery, setSearchQuery] = useState('');
   const backendStateRef = useRef<string>('Idle');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ringRef = useRef<SVGCircleElement>(null);
@@ -108,6 +108,7 @@ const Presentation: React.FC = () => {
     if (timerDisplayRef.current) timerDisplayRef.current.innerText = fmtTime(tl, ot);
   };
 
+  console.log('[RENDER] Presentation component rendered. running=', running, 'backendStateRef=', backendStateRef.current, 'intervalRef=', intervalRef.current);
   useEffect(() => {
     if (settings?.bellEnabled && settings.bellSound && settings.bellSound !== 'none') {
       audioRef.current = new Audio(`/sounds/${settings.bellSound}.wav`);
@@ -124,6 +125,7 @@ const Presentation: React.FC = () => {
   //   the regression: calling loadState() after start() was killing and re-creating
   //   the interval, causing inconsistent timer starts.
   const loadState = (isInitialLoad = false) => {
+    console.log('[LOADSTATE] called, isInitialLoad=', isInitialLoad, 'running=', running, 'backendStateRef=', backendStateRef.current);
     if (isInitialLoad) setLoading(true);
     setError('');
     Promise.all([
@@ -144,9 +146,12 @@ const Presentation: React.FC = () => {
       if (!isInitialLoad) {
         // Background sync: only reconcile if backend diverged from our optimistic state.
         if (!session.presentationRunning && backendStateRef.current === 'Live') {
+          console.log('[CLEAR] clearInterval called from loadState (background sync mismatch)');
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          console.log('[STATE] running = false (from loadState sync)');
           setRunning(false);
           backendStateRef.current = session.status || 'Idle';
+          console.log('[STATE] backendStateRef =', backendStateRef.current, '(from loadState sync)');
           setTimerState(session.status === 'Paused' ? 'Paused' : 'Ready');
           setStageStatus(session.status === 'Paused' ? 'Paused' : 'Ready');
         }
@@ -155,35 +160,60 @@ const Presentation: React.FC = () => {
 
       // Initial load: take full control of timer state from server.
       if (session.presentationRunning) {
-        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        if (intervalRef.current) { 
+          console.log('[CLEAR] clearInterval called from loadState (initial running)');
+          clearInterval(intervalRef.current); 
+          intervalRef.current = null; 
+        }
         const elapsed = session.elapsed || 0;
         const remaining = Math.max(0, duration - elapsed);
         const ot = elapsed > duration ? elapsed - duration : 0;
+        console.log('[STATE] running = true (from loadState initial)');
         setRunning(true);
         setEverStarted(true);
         syncTimerUI(remaining, ot);
         setTimerState(ot > 0 ? 'Overtime' : 'Presenting');
         setStageStatus('Presenting');
         backendStateRef.current = 'Live';
+        console.log('[STATE] backendStateRef = Live (from loadState initial)');
+        console.log('[INTERVAL] Creating interval (from loadState initial)');
         intervalRef.current = setInterval(tick, 1000);
+        console.log('[INTERVAL] interval id =', intervalRef.current, '(from loadState initial)');
       } else if (session.status === 'Paused') {
-        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        if (intervalRef.current) { 
+          console.log('[CLEAR] clearInterval called from loadState (initial paused)');
+          clearInterval(intervalRef.current); 
+          intervalRef.current = null; 
+        }
+        console.log('[STATE] running = false (from loadState paused)');
         setRunning(false);
         setTimerState('Paused'); setStageStatus('Paused');
         const tl = Math.max(0, duration - session.elapsed);
         const ot = session.elapsed > duration ? session.elapsed - duration : 0;
         syncTimerUI(tl, ot);
         backendStateRef.current = 'Paused';
+        console.log('[STATE] backendStateRef = Paused (from loadState paused)');
       } else if (session.status === 'Evaluating') {
-        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        if (intervalRef.current) { 
+          console.log('[CLEAR] clearInterval called from loadState (initial evaluating)');
+          clearInterval(intervalRef.current); 
+          intervalRef.current = null; 
+        }
+        console.log('[STATE] running = false (from loadState evaluating)');
         setRunning(false);
         setTimerState('Finished'); setStageStatus('Finished');
         backendStateRef.current = 'Evaluating';
+        console.log('[STATE] backendStateRef = Evaluating (from loadState evaluating)');
         setEvalOpen(true);
       } else {
-        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        if (intervalRef.current) { 
+          console.log('[CLEAR] clearInterval called from loadState (initial idle)');
+          clearInterval(intervalRef.current); 
+          intervalRef.current = null; 
+        }
         syncTimerUI(duration, 0);
         backendStateRef.current = 'Idle';
+        console.log('[STATE] backendStateRef = Idle (from loadState idle)');
       }
       setLoading(false);
     }).catch(err => {
@@ -196,7 +226,11 @@ const Presentation: React.FC = () => {
     loadState(true);
     // Cleanup: kill the timer interval when the component unmounts (navigation away).
     return () => {
-      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      if (intervalRef.current) { 
+        console.log('[CLEAR] clearInterval called from unmount');
+        clearInterval(intervalRef.current); 
+        intervalRef.current = null; 
+      }
     };
   }, []);
 
@@ -231,6 +265,11 @@ const Presentation: React.FC = () => {
   const tick = useCallback(() => {
     const prev = timerRef.current.timeLeft;
     const ot = timerRef.current.overtime;
+    const duration = totalSeconds;
+    let computedElapsed = 0;
+    if (prev > 0) computedElapsed = duration - prev;
+    else computedElapsed = duration + ot;
+    console.log(`[TICK] elapsed = ${computedElapsed} (timeLeft=${prev}, overtime=${ot})`);
     if (prev > 0) {
       const next = prev - 1;
       syncTimerUI(next, 0);
@@ -254,10 +293,12 @@ const Presentation: React.FC = () => {
       setStage('danger');
       updateRing(0, no);
     }
-  }, [updateStage, updateRing]);
+  }, [updateStage, updateRing, totalSeconds]);
 
   const start = async () => {
-    if (running || evalOpen || starting) return;
+    console.log('[CLICK] Start button clicked');
+    console.log('[START] start() entered. running=', running, 'evalOpen=', evalOpen, 'starting=', starting);
+    if (running || evalOpen || starting || finishing || loading) return;
     setStarting(true);
 
     // Capture the prior state BEFORE the await so the resume branch works.
@@ -265,40 +306,57 @@ const Presentation: React.FC = () => {
 
     try {
       if (priorState === 'Paused') {
-        await resumePresentation();
+        console.log('[API] Sending resumePresentation()');
+        const res = await resumePresentation();
+        if (res && res.data) setWorkflow(res.data);
+        console.log('[API] Response received (resume)');
       } else {
-        await startPresentation(workflow?.queue?.nextStudent?._id);
+        console.log('[API] Sending startPresentation()');
+        const res = await startPresentation(workflow?.queue?.nextStudent?._id);
+        if (res && res.data) setWorkflow(res.data);
+        console.log('[API] Response received (start)');
       }
       // API confirmed — now start the timer.
+      console.log('[STATE] running = true');
       setRunning(true); setEverStarted(true);
       setTimerState(timerRef.current.overtime > 0 ? 'Overtime' : 'Presenting');
       setStageStatus('Presenting');
       backendStateRef.current = 'Live';
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      console.log('[STATE] backendStateRef =', backendStateRef.current);
+      if (intervalRef.current) {
+        console.log('[CLEAR] clearInterval called from start()');
+        clearInterval(intervalRef.current);
+      }
+      console.log('[INTERVAL] Creating interval');
       intervalRef.current = setInterval(tick, 1000);
+      console.log('[INTERVAL] interval id =', intervalRef.current);
       setStarting(false);
       notify('Session is Live', `Presentation started.`, 'high');
-    } catch(e) { 
+    } catch(e: any) { 
       console.error(e);
+      const msg = e.response?.data?.error || e.message || 'Failed to start presentation';
+      notify('Failed to Start', msg, 'high');
       setStarting(false);
     }
   };
 
   const handleSelectStudent = async (studentId: string) => {
-    if (running || evalOpen || starting) return;
+    if (running || evalOpen || starting || finishing || loading) return;
     setStarting(true);
     try {
-      await overrideActiveStudent(studentId);
-      // API confirmed — now start the timer and close the modal.
+      const { overrideActiveStudent } = await import('../../services/presentationService');
+      const res = await overrideActiveStudent(studentId);
+      
+      // Update UI state with new student instantly
+      if (res && res.data) {
+        setWorkflow(res.data);
+      }
+      
+      // API confirmed — update UI without starting timer
       setSelectModalOpen(false);
-      setRunning(true); setEverStarted(true);
-      setTimerState('Presenting');
-      setStageStatus('Presenting');
-      backendStateRef.current = 'Live';
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(tick, 1000);
+      resetLocally();
       setStarting(false);
-      notify('Session is Live', `Presentation resumed for selected student.`, 'high');
+      notify('Student Selected', `Ready to start presentation.`, 'low');
     } catch (e) {
       console.error(e);
       notify('Error', 'Failed to select student.', 'high');
@@ -307,7 +365,8 @@ const Presentation: React.FC = () => {
   };
 
   const pause = async () => {
-    if (!running) return;
+    if (!running || starting || finishing || loading) return;
+    setStarting(true);
 
     // Update UI immediately — timer stops before API round-trip.
     setRunning(false);
@@ -317,7 +376,9 @@ const Presentation: React.FC = () => {
     notify('Session Paused', 'The presentation timer has been paused.', 'normal');
 
     try {
-      await pausePresentation();
+      const res = await pausePresentation();
+      if (res && res.data) setWorkflow(res.data);
+      setStarting(false);
       // No loadState() needed — UI is already correct.
     } catch(e) {
       console.error(e);
@@ -327,6 +388,7 @@ const Presentation: React.FC = () => {
       setTimerState('Presenting'); setStageStatus('Presenting');
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(tick, 1000);
+      setStarting(false);
     }
   };
 
@@ -343,9 +405,9 @@ const Presentation: React.FC = () => {
   const reset = async () => {
     if (window.confirm("Are you sure you want to reset the current session?")) {
       try {
-        await apiResetSession();
+        const res = await apiResetSession();
+        if (res && res.data) setWorkflow(res.data);
         resetLocally();
-        loadState();
       } catch (e) {
         console.error(e);
       }
@@ -353,34 +415,41 @@ const Presentation: React.FC = () => {
   };
 
   const skip = async () => {
+    if (starting || finishing || loading) return;
+    setStarting(true);
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     try {
       const { skipPresentation } = await import('../../services/presentationService');
-      await skipPresentation(workflow?.queue?.nextStudent?._id);
+      const res = await skipPresentation(workflow?.queue?.nextStudent?._id);
+      if (res && res.data) setWorkflow(res.data);
       setRunning(false); setTimerState('Skipped'); setStageStatus('Skipped');
       backendStateRef.current = 'Idle';
       notify('Student Skipped', `${workflow?.queue?.nextStudent?.name || 'Student'} was skipped and moved back in queue.`, 'low');
-      setTimeout(() => { resetLocally(); loadState(); }, 900);
-    } catch(e) { console.error(e); }
+      setTimeout(() => { resetLocally(); setStarting(false); }, 900);
+    } catch(e) { console.error(e); setStarting(false); }
   };
 
   const markAbs = async () => {
+    if (starting || finishing || loading) return;
+    setStarting(true);
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     try {
       const { markAbsent } = await import('../../services/presentationService');
-      await markAbsent(workflow?.queue?.nextStudent?._id);
+      const res = await markAbsent(workflow?.queue?.nextStudent?._id);
+      if (res && res.data) setWorkflow(res.data);
       setRunning(false); setTimerState('Absent'); setStageStatus('Absent');
       backendStateRef.current = 'Idle';
       notify('Student Absent', `${workflow?.queue?.nextStudent?.name || 'Student'} marked absent.`, 'low');
-      setTimeout(() => { resetLocally(); loadState(); }, 900);
-    } catch(e) { console.error(e); }
+      setTimeout(() => { resetLocally(); setStarting(false); }, 900);
+    } catch(e) { console.error(e); setStarting(false); }
   };
 
   const finish = async () => {
-    if (finishing || evalOpen) return;
+    if (finishing || starting || loading || evalOpen) return;
     setFinishing(true);
     try {
-      await finishPresentation();
+      const res = await finishPresentation();
+      if (res && res.data) setWorkflow(res.data);
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       setRunning(false); setTimerState('Finished'); setStageStatus('Finished');
       backendStateRef.current = 'Evaluating';
@@ -397,10 +466,10 @@ const Presentation: React.FC = () => {
   
   const handleSkipEval = async () => {
     try {
-      await skipEvaluation();
+      const res = await skipEvaluation();
+      if (res && res.data) setWorkflow(res.data);
       setEvalOpen(false);
       resetLocally();
-      loadState();
       notify('Evaluation Skipped', 'The evaluation step was skipped.', 'low');
     } catch (e) {
       console.error(e);
@@ -409,26 +478,26 @@ const Presentation: React.FC = () => {
 
   const submitEval = async () => {
     try {
-      await submitEvaluation({ overallRating: parseFloat(avgScore()), feedback: evalComment });
+      const res = await submitEvaluation({ overallRating: parseFloat(avgScore()), feedback: evalComment });
+      if (res && res.data) setWorkflow(res.data);
       setEvalSuccess(true);
       notify('Evaluation Submitted', `Student evaluation successfully saved. Queue advanced.`);
       setTimeout(() => {
         setEvalOpen(false);
         resetLocally(); setScores({ 0:0,1:0,2:0,3:0 }); setEvalComment('');
-        loadState();
       }, 1300);
     } catch (e) { console.error(e); }
   };
 
   const submitRedo = async () => {
     try {
-      await submitEvaluation({ overallRating: parseFloat(avgScore()), feedback: evalComment, status: 'Redo' });
+      const res = await submitEvaluation({ overallRating: parseFloat(avgScore()), feedback: evalComment, status: 'Redo' });
+      if (res && res.data) setWorkflow(res.data);
       setEvalSuccess(true);
       notify('Student marked for Redo', `Student evaluation saved. Queue advanced.`);
       setTimeout(() => {
         setEvalOpen(false);
         resetLocally(); setScores({ 0:0,1:0,2:0,3:0 }); setEvalComment('');
-        loadState();
       }, 1300);
     } catch (e) { console.error(e); }
   };
@@ -447,6 +516,7 @@ const Presentation: React.FC = () => {
   const ringColor = stage === 'danger' ? '#D71920' : stage === 'warning' ? '#E8963C' : '#4FA2CF';
   const timerColor = stage === 'danger' ? 'var(--primary-red)' : stage === 'warning' ? '#E8963C' : 'var(--ink)';
   const canFinish = (everStarted || timerRef.current.overtime > 0) && !evalOpen;
+  const isActionInProgress = starting || finishing || loading;
 
   if (loading) return <AnimatedLoadingModal type="page" />;
   if (error) return <div style={{ textAlign: 'center', marginTop: 100 }}><h3 style={{color:'var(--primary-red)'}}>Failed to load</h3><p>{error}</p><button className="btn-primary" onClick={() => loadState(true)}>Retry</button></div>;
@@ -468,6 +538,31 @@ const Presentation: React.FC = () => {
               </button>
             </div>
             
+            {/* All Students Search */}
+            <div>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>All Students</h3>
+              <input type="text" placeholder="Search by name or roll number..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--line)', background: 'rgba(255,255,255,0.7)', fontSize: 14, marginBottom: 10, outline: 'none' }} />
+              {(!workflow?.queue?.allStudents || workflow.queue.allStudents.length === 0) ? (
+                <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>No students found.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto', paddingRight: 4 }}>
+                  {workflow.queue.allStudents.filter((s: any) => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || (s.rollNo && s.rollNo.toLowerCase().includes(searchQuery.toLowerCase()))).map((s: any) => (
+                    <button key={s.id || s._id} onClick={() => handleSelectStudent(s.id || s._id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderRadius: 12, background: 'rgba(255,255,255,0.6)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', transition: 'background .2s' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.9)'} onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.6)'}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 2 }}>Roll No: {s.rollNo} {s.title ? `· ${s.title}` : ''}</div>
+                      </div>
+                      <span className={`badge badge-${s.status.toLowerCase()}`} style={{ 
+                        background: s.status === 'Completed' ? 'var(--light-green)' : s.status === 'Current' ? 'var(--light-blue)' : s.status === 'Skipped' ? 'rgba(232,150,60,0.15)' : s.status === 'Absent' ? 'rgba(215,25,32,0.1)' : s.status === 'Redo' ? 'var(--light-blue)' : 'var(--glass)',
+                        color: s.status === 'Completed' ? 'var(--primary-green)' : s.status === 'Current' ? 'var(--primary-blue)' : s.status === 'Skipped' ? '#E8963C' : s.status === 'Absent' ? '#D71920' : s.status === 'Redo' ? 'var(--primary-blue)' : 'var(--ink-soft)',
+                        padding: '4px 8px', borderRadius: 100, fontSize: 11, fontWeight: 700, textTransform: 'uppercase'
+                      }}>{s.status}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Skipped Students */}
             <div>
               <h3 style={{ fontSize: 14, fontWeight: 700, color: '#E8963C', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Skipped Students</h3>
@@ -627,8 +722,10 @@ const Presentation: React.FC = () => {
             <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 15px', borderRadius: 100, background: 'rgba(255,255,255,0.55)', border: '1px solid var(--line)', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-soft)' }}>{chip}</span>
           ))}
         </div>
-        <h1 style={{ fontSize: 'clamp(38px,5.6vw,68px)', fontWeight: 600, lineHeight: 1.05, marginBottom: 14 }}>{student?.name || 'No Student Next'}</h1>
-        <p style={{ fontSize: 'clamp(16px,1.9vw,21px)', color: 'var(--ink-soft)', maxWidth: 640, marginBottom: 36, lineHeight: 1.5 }}>{student?.title}</p>
+        <h1 style={{ fontSize: 'clamp(38px,5.6vw,68px)', fontWeight: 600, lineHeight: 1.05, marginBottom: student?.title ? 10 : 36 }}>{student?.name || 'No Student Next'}</h1>
+        {student?.title && (
+          <h2 style={{ fontSize: 'clamp(20px,2.5vw,28px)', fontWeight: 500, color: 'var(--ink-soft)', maxWidth: 640, marginBottom: 36, lineHeight: 1.4 }}>{student.title}</h2>
+        )}
 
         {/* Timer */}
         <div style={{ position: 'relative', width: 'min(46vw,380px)', height: 'min(46vw,380px)', margin: '0 auto 18px', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: stage === 'danger' ? 'ringPulse 1s ease-in-out infinite' : 'none' }}>
@@ -647,13 +744,13 @@ const Presentation: React.FC = () => {
         {/* Controls */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8, marginBottom: 26 }}>
           {[
-            { id: 'start', label: 'Start', icon: <path d="M6 4l14 8-14 8V4z" fill="white"/>, cls: 'ctrl-primary', disabled: running || evalOpen, onClick: start },
-            { id: 'pause', label: 'Pause', icon: <><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></>, cls: 'ctrl-ghost', disabled: !running, onClick: pause },
-            { id: 'select', label: 'Select Student', icon: <><circle cx="12" cy="7" r="4" stroke="currentColor" strokeWidth="2"/><path d="M5 21v-2a4 4 0 014-4h6a4 4 0 014 4v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></>, cls: 'ctrl-ghost', disabled: running || evalOpen, onClick: () => setSelectModalOpen(true) },
-            { id: 'reset', label: 'Reset', icon: <><path d="M4 4v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M4.5 14a8 8 0 1 0 2-8.5L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>, cls: 'ctrl-ghost', disabled: evalOpen, onClick: reset },
-            { id: 'skip', label: 'Skip', icon: <><path d="M5 5l14 7-14 7V5z" fill="currentColor"/><rect x="19" y="5" width="2.5" height="14" fill="currentColor"/></>, cls: 'ctrl-warn', disabled: evalOpen, onClick: skip },
-            { id: 'absent', label: 'Absent', icon: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z" fill="currentColor"/>, cls: 'ctrl-warn', disabled: evalOpen, onClick: markAbs },
-            { id: 'finish', label: 'Finish', icon: <path d="M5 12l4 4 10-10" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/>, cls: 'ctrl-finish', disabled: !canFinish, onClick: finish },
+            { id: 'start', label: 'Start', icon: <path d="M6 4l14 8-14 8V4z" fill="white"/>, cls: 'ctrl-primary', disabled: running || evalOpen || isActionInProgress, onClick: start },
+            { id: 'pause', label: 'Pause', icon: <><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></>, cls: 'ctrl-ghost', disabled: !running || isActionInProgress, onClick: pause },
+            { id: 'select', label: 'Select Student', icon: <><circle cx="12" cy="7" r="4" stroke="currentColor" strokeWidth="2"/><path d="M5 21v-2a4 4 0 014-4h6a4 4 0 014 4v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></>, cls: 'ctrl-ghost', disabled: running || evalOpen || isActionInProgress, onClick: () => setSelectModalOpen(true) },
+            { id: 'reset', label: 'Reset', icon: <><path d="M4 4v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M4.5 14a8 8 0 1 0 2-8.5L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>, cls: 'ctrl-ghost', disabled: evalOpen || isActionInProgress, onClick: reset },
+            { id: 'skip', label: 'Skip', icon: <><path d="M5 5l14 7-14 7V5z" fill="currentColor"/><rect x="19" y="5" width="2.5" height="14" fill="currentColor"/></>, cls: 'ctrl-warn', disabled: evalOpen || isActionInProgress, onClick: skip },
+            { id: 'absent', label: 'Absent', icon: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z" fill="currentColor"/>, cls: 'ctrl-warn', disabled: evalOpen || isActionInProgress, onClick: markAbs },
+            { id: 'finish', label: 'Finish', icon: <path d="M5 12l4 4 10-10" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/>, cls: 'ctrl-finish', disabled: !canFinish || isActionInProgress, onClick: finish },
           ].map(btn => (
             <button key={btn.id} disabled={btn.disabled} onClick={btn.onClick}
               style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 24px', borderRadius: 100, fontSize: 14, fontWeight: 600, transition: 'transform .25s, box-shadow .25s, opacity .25s', position: 'relative', overflow: 'hidden', opacity: btn.disabled ? .35 : 1, cursor: btn.disabled ? 'not-allowed' : 'pointer',

@@ -17,7 +17,6 @@ const statusMeta: Record<string, { label: string; cls: string }> = {
 const Students: React.FC = () => {
   const [search, setSearch] = useState('');
   const [activeStatus, setActiveStatus] = useState<Status>('all');
-  const [activeSubject, setActiveSubject] = useState('all');
   const [studentsList, setStudentsList] = useState<any[]>([]);
   const [totalStudents, setTotalStudents] = useState(0);
   const [page, setPage] = useState(1);
@@ -73,13 +72,13 @@ const Students: React.FC = () => {
     loadData();
   }, [page, limit]);
 
-  // Client side filtering for status/subject (since the backend doesn't fully support it on /students yet)
+  // Client side filtering for status (since the backend doesn't fully support it on /students yet)
   // Ideally, this should be done on the backend.
   const filtered = studentsList.filter(s => {
     const sStatus = s.status ? s.status.toLowerCase() : 'pending';
     const matchStatus = activeStatus === 'all' || sStatus === activeStatus;
-    const matchSubject = activeSubject === 'all' || s.subject === activeSubject; // assuming subject comes from somewhere, might need overview API
-    return matchStatus && matchSubject;
+    
+    return matchStatus;
   });
 
   const totalPages = Math.ceil(totalStudents / limit) || 1;
@@ -173,7 +172,7 @@ const Students: React.FC = () => {
           <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} ref={fileInputRef} onChange={handleImport} />
           <button className="btn-secondary" onClick={() => fileInputRef.current?.click()} disabled={isImporting} style={{ background: 'rgba(255,255,255,0.6)', border: '1px solid var(--line)', padding: '10px 18px', borderRadius: 100, fontSize: 14, fontWeight: 600, cursor: isImporting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
             <svg viewBox="0 0 24 24" fill="none" style={{ width: 15, height: 15 }}><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            {isImporting ? 'Importing...' : 'Import Excel'}
+            {isImporting ? 'Importing...' : 'Import Topics'}
           </button>
           <button className="btn-primary" onClick={() => handleOpenModal('add')}>
             <svg viewBox="0 0 24 24" fill="none" style={{ width: 15, height: 15 }}><path d="M12 5v14M5 12h14" stroke="white" strokeWidth="2.2" strokeLinecap="round"/></svg>
@@ -183,26 +182,19 @@ const Students: React.FC = () => {
       </Reveal>
 
       {/* Toolbar */}
-      <Reveal delay={70} style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24, flexWrap: 'wrap' }}>
-        <div className="search-box" style={{ flex: 1, minWidth: 240, maxWidth: 380 }}>
-          <svg viewBox="0 0 24 24" fill="none" style={{ width: 16, height: 16, color: 'var(--ink-faint)', flexShrink: 0 }}><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or roll number…" />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {pillStatuses.map(st => (
-             <button key={st} className={`filter-pill${activeStatus === st ? ' active' : ''}`} onClick={() => setActiveStatus(st)}>
-               {pillLabels[st]}
-             </button>
-          ))}
-        </div>
-        <div className="select-wrap" style={{ marginLeft: 'auto' }}>
-          <select className="select-input" value={activeSubject} onChange={e => setActiveSubject(e.target.value)}>
-            <option value="all">All subjects</option>
-            <option value="Computer Networks">Computer Networks</option>
-            <option value="Operating Systems">Operating Systems</option>
-            <option value="Data Structures">Data Structures</option>
-          </select>
-          <svg viewBox="0 0 24 24" fill="none" style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', width: 12, height: 12, color: 'var(--ink-faint)', pointerEvents: 'none' }}><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      <Reveal delay={70} style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', flex: 1 }}>
+          <div className="search-box" style={{ flex: 1, minWidth: 240, maxWidth: 380 }}>
+            <svg viewBox="0 0 24 24" fill="none" style={{ width: 16, height: 16, color: 'var(--ink-faint)', flexShrink: 0 }}><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or roll number…" />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {pillStatuses.map(st => (
+               <button key={st} className={`filter-pill${activeStatus === st ? ' active' : ''}`} onClick={() => setActiveStatus(st)}>
+                 {pillLabels[st]}
+               </button>
+            ))}
+          </div>
         </div>
       </Reveal>
 
@@ -225,7 +217,7 @@ const Students: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '64px 20px 56px', textAlign: 'center' }}>
               <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>No students found</h3>
               <p style={{ fontSize: '13.5px', color: 'var(--ink-soft)', maxWidth: 320, marginBottom: 20 }}>Try adjusting your search term or filters.</p>
-              <button onClick={() => { setSearch(''); setActiveStatus('all'); setActiveSubject('all'); }} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '10px 20px', borderRadius: 100, background: 'rgba(255,255,255,0.6)', border: '1px solid var(--line)', fontSize: 13, fontWeight: 600, color: 'var(--primary-blue)', cursor: 'pointer' }}>
+              <button onClick={() => { setSearch(''); setActiveStatus('all'); }} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '10px 20px', borderRadius: 100, background: 'rgba(255,255,255,0.6)', border: '1px solid var(--line)', fontSize: 13, fontWeight: 600, color: 'var(--primary-blue)', cursor: 'pointer' }}>
                 Clear filters
               </button>
             </div>
