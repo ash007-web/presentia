@@ -15,8 +15,8 @@ const getSystemState = async (prefetchedSettings = null) => {
 
 // ─── Session State ────────────────────────────────────────────────────────────
 
-export const getSessionState = async () => {
-  const { settings, activePeriod } = await getSystemState();
+export const getSessionState = async (prefetchedSettings = null, systemState = null) => {
+  const { settings, activePeriod } = systemState ?? await getSystemState(prefetchedSettings);
   const session = settings.activeSession;
 
   let elapsed = session.accumulatedTime || 0;
@@ -46,8 +46,8 @@ export const getSessionState = async () => {
 
 // ─── Queue State ──────────────────────────────────────────────────────────────
 
-export const getQueueState = async () => {
-  const { settings, activePeriod } = await getSystemState();
+export const getQueueState = async (systemState = null) => {
+  const { settings, activePeriod } = systemState ?? await getSystemState();
 
   let currentStudent = null;
   let nextStudent = null;
@@ -169,17 +169,20 @@ export const getWorkflowState = async (prefetchedSettings = null) => {
   };
 };
 
-export const getUnifiedWorkflowState = async (settings = null) => {
-  return {
-    session: await getSessionState(settings),
-    queue: await getQueueState()
-  };
+export const getUnifiedWorkflowState = async (settings = null, systemState = null) => {
+  const effectiveSystemState = systemState ? { ...systemState, settings: settings || systemState.settings } : null;
+  const [session, queue] = await Promise.all([
+    getSessionState(settings, effectiveSystemState),
+    getQueueState(effectiveSystemState)
+  ]);
+  return { session, queue };
 };
 
 // ─── Presentation Controls ────────────────────────────────────────────────────
 
 export const startPresentation = async (studentId) => {
-  const { settings, activePeriod, ttInfo } = await getSystemState();
+  const systemState = await getSystemState();
+  const { settings, activePeriod, ttInfo } = systemState;
   // Use activePeriod if a class is running right now; fall back to nextPeriod
   // so teachers can start slightly before/after a period boundary.
   const period = activePeriod || ttInfo?.nextPeriod || null;
@@ -225,18 +228,19 @@ export const startPresentation = async (studentId) => {
     },
   });
 
-  return await getUnifiedWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings, systemState);
 };
 
 export const pausePresentation = async () => {
-  let settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  const systemState = await getSystemState();
+  const { settings } = systemState;
   if (settings.activeSession.state !== 'Live') throw new AppError('Presentation is not live', 400);
 
   const now = new Date();
   const timeSinceUnpause = (now - new Date(settings.activeSession.lastUnpausedAt)) / 1000;
   const accumulated = (settings.activeSession.accumulatedTime || 0) + timeSinceUnpause;
 
-  settings = await Settings.updateDoc({
+  const updatedSettings = await Settings.updateDoc({
     activeSession: {
       ...settings.activeSession,
       accumulatedTime: accumulated,
@@ -245,11 +249,12 @@ export const pausePresentation = async () => {
   });
 
   // Return unified state to ensure UI sync
-  return await getUnifiedWorkflowState(settings);
+  return await getUnifiedWorkflowState(updatedSettings, systemState);
 };
 
 export const resumePresentation = async () => {
-  let settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  const systemState = await getSystemState();
+  let { settings } = systemState;
   if (settings.activeSession.state !== 'Paused') throw new AppError('Presentation is not paused', 400);
 
   settings = await Settings.updateDoc({
@@ -261,11 +266,12 @@ export const resumePresentation = async () => {
   });
 
   // Return unified state to ensure UI sync
-  return await getUnifiedWorkflowState(settings);
+  return await getUnifiedWorkflowState(settings, systemState);
 };
 
 export const finishPresentation = async () => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  const systemState = await getSystemState();
+  const { settings } = systemState;
   if (settings.activeSession.state !== 'Live' && settings.activeSession.state !== 'Paused') {
     throw new AppError('No active presentation to finish', 400);
   }
@@ -288,7 +294,8 @@ export const finishPresentation = async () => {
 };
 
 export const submitEvaluation = async (evaluationData) => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  const systemState = await getSystemState();
+  const { settings } = systemState;
   if (settings.activeSession.state !== 'Evaluating') throw new AppError('System is not in evaluating state', 400);
 
   const presentationId = settings.activeSession.presentationId;
@@ -315,11 +322,12 @@ export const submitEvaluation = async (evaluationData) => {
     },
   });
 
-  return await getUnifiedWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings, systemState);
 };
 
 export const skipPresentation = async (studentId) => {
-  const { settings, activePeriod } = await getSystemState();
+  const systemState = await getSystemState();
+  const { settings, activePeriod } = systemState;
   if (!activePeriod) throw new AppError('No active period in timetable', 400);
 
   const student = await Student.findById(studentId);
@@ -332,7 +340,7 @@ export const skipPresentation = async (studentId) => {
     status: 'Skipped',
     presentationDate: { $gte: new Date(Date.now() - 10000) }
   });
-  if (recentPresentation) return await getUnifiedWorkflowState();
+  if (recentPresentation) return await getUnifiedWorkflowState(null, systemState);
 
   const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
@@ -346,11 +354,12 @@ export const skipPresentation = async (studentId) => {
     presentationDate: new Date(),
   });
 
-  return await getUnifiedWorkflowState();
+  return await getUnifiedWorkflowState(null, systemState);
 };
 
 export const markAbsent = async (studentId) => {
-  const { settings, activePeriod } = await getSystemState();
+  const systemState = await getSystemState();
+  const { settings, activePeriod } = systemState;
   if (!activePeriod) throw new AppError('No active period in timetable', 400);
 
   const student = await Student.findById(studentId);
@@ -363,7 +372,7 @@ export const markAbsent = async (studentId) => {
     status: 'Absent',
     presentationDate: { $gte: new Date(Date.now() - 10000) }
   });
-  if (recentPresentation) return await getUnifiedWorkflowState();
+  if (recentPresentation) return await getUnifiedWorkflowState(null, systemState);
 
   const orderCount = await Presentation.countDocuments({ cycleId: settings.currentCycle.id, subject: activePeriod.subject });
 
@@ -377,11 +386,12 @@ export const markAbsent = async (studentId) => {
     presentationDate: new Date(),
   });
 
-  return await getUnifiedWorkflowState();
+  return await getUnifiedWorkflowState(null, systemState);
 };
 
 export const skipEvaluation = async () => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  const systemState = await getSystemState();
+  const { settings } = systemState;
   if (settings.activeSession.state !== 'Evaluating') throw new AppError('System is not in evaluating state', 400);
 
   const presentationId = settings.activeSession.presentationId;
@@ -403,11 +413,12 @@ export const skipEvaluation = async () => {
     },
   });
 
-  return await getUnifiedWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings, systemState);
 };
 
 export const resetSession = async () => {
-  const settings = await Settings.findOne({ singletonKey: 'GLOBAL_SETTINGS' });
+  const systemState = await getSystemState();
+  const { settings } = systemState;
   const presentationId = settings.activeSession.presentationId;
 
   if (presentationId && settings.activeSession.state !== 'Evaluating') {
@@ -425,11 +436,12 @@ export const resetSession = async () => {
     },
   });
 
-  return await getUnifiedWorkflowState(updatedSettings);
+  return await getUnifiedWorkflowState(updatedSettings, systemState);
 };
 
 export const overrideActiveStudent = async (studentId) => {
-  const { settings, activePeriod, ttInfo } = await getSystemState();
+  const systemState = await getSystemState();
+  const { settings, activePeriod, ttInfo } = systemState;
   const period = activePeriod || ttInfo?.nextPeriod || null;
   if (!period) throw new AppError('No active period in timetable to start presentation', 400);
   if (settings.activeSession.state !== 'Idle') throw new AppError('A presentation is already active or evaluating', 400);
