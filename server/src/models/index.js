@@ -138,9 +138,9 @@ export const Student = {
     const snap = await ref.get();
     if (!snap.exists) return null;
     await ref.update(withUpdatedAt(data));
-    const updated = await ref.get();
     deleteCache('Student:findAll');
-    return docToObj(updated);
+    const existing = docToObj(snap);
+    return { ...existing, ...data, updatedAt: new Date() };
   },
 
   async findByIdAndDelete(id) {
@@ -229,8 +229,8 @@ export const Cycle = {
     if (updateData.startDate) updateData.startDate = Timestamp.fromDate(new Date(updateData.startDate));
     if (updateData.endDate) updateData.endDate = Timestamp.fromDate(new Date(updateData.endDate));
     await ref.update(withUpdatedAt(updateData));
-    const updated = await ref.get();
-    return docToObj(updated);
+    const existing = docToObj(snap);
+    return { ...existing, ...data, updatedAt: new Date() };
   },
 
   async findByIdAndDelete(id) {
@@ -328,11 +328,11 @@ export const Presentation = {
       updateData.presentationDate = Timestamp.fromDate(new Date(updateData.presentationDate));
     }
     await ref.update(withUpdatedAt(updateData));
-    const updated = await ref.get();
-    const obj = docToObj(updated);
-    deleteCache(`Presentation:cycle:${obj.cycleId}`);
+    const existing = docToObj(snap);
+    const merged = { ...existing, ...data, updatedAt: new Date() };
+    deleteCache(`Presentation:cycle:${merged.cycleId}`);
     deleteCache('Presentation:findAll');
-    return obj;
+    return merged;
   },
 
   async findByIdAndDelete(id) {
@@ -451,6 +451,15 @@ export const Settings = {
     } else {
       await ref.update(withUpdatedAt(updateData));
     }
+    const cached = getCache('Settings:GLOBAL');
+    if (cached) {
+      const merged = { ...cached, ...data, updatedAt: new Date() };
+      if (merged.activeSession) {
+        merged.activeSession.presentation = merged.activeSession.presentationId || null;
+      }
+      setCache('Settings:GLOBAL', merged, 60);
+      return merged;
+    }
     deleteCache('Settings:GLOBAL');
     return this.findOne({ singletonKey: SETTINGS_DOC });
   },
@@ -459,6 +468,16 @@ export const Settings = {
     const ref = settingsCol().doc(SETTINGS_DOC);
     const updateData = buildSettingsUpdate(data);
     await ref.update(withUpdatedAt(updateData));
+    
+    const cached = getCache('Settings:GLOBAL');
+    if (cached) {
+      const merged = { ...cached, ...data, updatedAt: new Date() };
+      if (merged.activeSession) {
+        merged.activeSession.presentation = merged.activeSession.presentationId || null;
+      }
+      setCache('Settings:GLOBAL', merged, 60);
+      return merged;
+    }
     deleteCache('Settings:GLOBAL');
     return this.findOne({ singletonKey: SETTINGS_DOC });
   },
@@ -537,9 +556,10 @@ export const Timetable = {
     } else {
       await ref.update(docData);
     }
-    deleteCache(`Timetable:${day}`);
-    const updated = await ref.get();
-    return docToObj(updated);
+    const existing = snap.exists ? docToObj(snap) : null;
+    const merged = existing ? { ...existing, periods: data.periods || [], updatedAt: new Date() } : { day, periods: data.periods || [], createdAt: new Date(), updatedAt: new Date(), id: day, _id: day };
+    setCache(`Timetable:${day}`, merged, 3600);
+    return merged;
   },
 
   async findOneAndDelete(query = {}) {
@@ -622,8 +642,8 @@ export const Override = {
     const updateData = { ...data };
     if (updateData.date) updateData.date = Timestamp.fromDate(new Date(updateData.date));
     await ref.update(withUpdatedAt(updateData));
-    const updated = await ref.get();
-    return docToObj(updated);
+    const existing = docToObj(snap);
+    return { ...existing, ...data, updatedAt: new Date() };
   },
 
   async findByIdAndDelete(id) {
